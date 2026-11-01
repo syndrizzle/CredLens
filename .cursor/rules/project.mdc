@@ -1,0 +1,6 @@
+---
+description: Shared CredLens and Ponytail repository instructions
+alwaysApply: true
+---
+
+Read and follow the root `AGENTS.md` before working in this repository. It contains the shared Ponytail rules, CredLens scope, stack, UI conventions, and verification requirements. Keep project instructions there rather than duplicating them here.

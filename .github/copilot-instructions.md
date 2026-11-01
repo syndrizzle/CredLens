@@ -1,0 +1,1 @@
+Read and follow [AGENTS.md](../AGENTS.md) before working in this repository. It contains the shared Ponytail rules, CredLens scope, stack, UI conventions, and verification requirements. Keep project instructions there rather than duplicating them here.

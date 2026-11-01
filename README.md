@@ -1,4 +1,26 @@
-# React + TypeScript + Vite
+# CredLens
+
+## Temporary development setup
+
+This section will be replaced with the project description, features, and user-facing documentation when CredLens is ready.
+
+The repository uses [Ponytail](https://github.com/DietrichGebert/ponytail) rules alongside CredLens-specific guidance in [AGENTS.md](AGENTS.md). No plugin installation or per-developer skills setup is required for this instruction-only configuration.
+
+| Agent | Repository entry point |
+| --- | --- |
+| Codex and other AGENTS.md-aware agents | Root `AGENTS.md` |
+| Claude Code | `CLAUDE.md` imports `AGENTS.md` |
+| Gemini CLI | `GEMINI.md` imports `AGENTS.md` |
+| Cursor | `.cursor/rules/project.mdc` directs the agent to `AGENTS.md` |
+| GitHub Copilot | `.github/copilot-instructions.md` directs the agent to `AGENTS.md` |
+
+Once these files are committed and pushed, teammates receive them on clone or pull. Start a fresh agent session in the repository with project instructions enabled. Before the first task, ask the agent to identify the instruction files it loaded and summarize the Ponytail rules, shadcn preference, and current development phase. For another tool, configure its project instructions to read `AGENTS.md`.
+
+Keep shared rules in `AGENTS.md` and adapters small. The Ponytail rules are pinned to revision `96608e078b2d5ea607c5c3b8b5a54d1c1fba6846`; their [MIT license](docs/third-party/ponytail-LICENSE.txt) is included. Update them manually while preserving CredLens requirements.
+
+These instructions guide model behaviour; they do not enforce checks or guarantee correctness. Optional Ponytail skills, slash commands, lifecycle hooks, and mode switching are not installed.
+
+## Frontend template
 
 This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
 
