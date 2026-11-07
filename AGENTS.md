@@ -35,6 +35,8 @@ Never cut: validation at trust boundaries, error handling that prevents data los
 
 ## Working agreement
 
+- Before every task, read [docs/PROJECT_SPEC.md](docs/PROJECT_SPEC.md), the living implementation spec and progress tracker, then inspect the relevant code. Follow its task order, dependencies, and completion criteria; it is the source of truth for what's done, pending, and next.
+- Keep that tracker current in the same change as every task: mark work in progress when starting; before handoff, update task status/evidence, current stage and next task, last-updated date, decisions/blockers, and the append-only task log. Record actual checks and unfinished work; never mark unverified behaviour complete. Add a focused task ID for new work rather than silently expanding scope.
 - During development, `README.md` may contain temporary agent setup notes. When the project is ready, replace these with the project's description, features, and user-facing documentation. Keep authoritative agent guidance in `AGENTS.md` and its adapter files.
 - Build slowly, in small phases, with proper planning before implementation. Do not implement the entire proposal in one pass.
 - Before starting a phase, outline its scope, user flow, data needs, acceptance checks, and unresolved decisions. Keep each change focused on the current agreed task.
@@ -69,7 +71,7 @@ The baseline is the supplied **CredLens-Milestone-One-Report.pdf**, the Group 36
 - Existing theme in `src/index.css`: neutral base, green primary tokens, Inter body font, Merriweather heading font, and light/dark variables.
 - Bun is the existing package manager; preserve `bun.lock` and avoid introducing another lockfile.
 - Oxlint for linting. The `@/` alias resolves to `src/`.
-- At initialization, `src/App.tsx` is a placeholder and only the shadcn button has been added. No backend, database, or financial workflow is implemented yet. Update this note as work progresses.
+- See the verified baseline and task statuses in [docs/PROJECT_SPEC.md](docs/PROJECT_SPEC.md) for current implementation state and check results; keep progress details there rather than duplicating them here.
 
 ### Planned backend from the proposal
 
@@ -108,7 +110,7 @@ These backend technologies are agreed direction, not instructions to install or 
 
 ## Development phases
 
-Plan the current phase with the user before expanding scope. The proposal's sequence is:
+Plan the current phase with the user before expanding scope. The actionable task list, phase gates, and progress are maintained in [docs/PROJECT_SPEC.md](docs/PROJECT_SPEC.md). The proposal's sequence is:
 
 1. **Core workflow:** confirm six formulas and input rules; implement manual entry, one fictional company case, calculations, and basic results. Verify arithmetic and missing-input behaviour.
 2. **Data, security, and evidence:** protected business workspaces, database persistence, reviewed-value states, source/origin tracking, and dependency/gap rules. Verify cross-business isolation and selective blocking of affected analyses.
