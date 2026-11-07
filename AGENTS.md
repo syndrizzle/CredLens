@@ -45,6 +45,7 @@ Never cut: validation at trust boundaries, error handling that prevents data los
 - Keep these instructions current when the user confirms decisions or changes direction. Distinguish planned work from implemented behaviour.
 - Inspect the repository and existing changes before editing. Preserve unrelated user work. Do not replace the initialized stack or preset without discussing the need.
 - Ground implementation in inspected files and installed versions. Verify unfamiliar library APIs against installed types/source or official documentation; do not invent APIs, files, commands, or completed behaviour.
+- Before adding or upgrading dependencies, check the official package registry online for current stable releases, supported runtime versions, and compatibility constraints. Never select version numbers from memory. Record the verification date/source and any reason for choosing an older release; pin the versions actually resolved and tested. Do not upgrade unrelated dependencies just to make every package latest.
 - Separate observed facts from assumptions. When evidence is missing, say so and clarify decisions that affect correctness rather than guessing.
 
 ## Product and scope

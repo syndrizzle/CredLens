@@ -1,0 +1,119 @@
+{
+  "request": {
+    "business_name": "Aster Components (fictional)",
+    "currency": "INR",
+    "basis": "standalone",
+    "periods": [
+      {
+        "year_start": 2023,
+        "unit": "rupees",
+        "comparable_to_prior": false,
+        "values": {
+          "revenue": {
+            "raw": "10000000.00",
+            "reviewed": false
+          },
+          "profit_after_tax": {
+            "raw": "900000.00",
+            "reviewed": false
+          },
+          "ebit": {
+            "raw": "1500000.00",
+            "reviewed": false
+          },
+          "interest_expense": {
+            "raw": "300000.00",
+            "reviewed": false
+          },
+          "current_assets": {
+            "raw": "4000000.00",
+            "reviewed": false
+          },
+          "current_liabilities": {
+            "raw": "2000000.00",
+            "reviewed": false
+          },
+          "total_assets": {
+            "raw": "10000000.00",
+            "reviewed": false
+          },
+          "total_liabilities": {
+            "raw": "4000000.00",
+            "reviewed": false
+          },
+          "total_equity": {
+            "raw": "6000000.00",
+            "reviewed": false
+          },
+          "short_term_borrowings": {
+            "raw": "500000.00",
+            "reviewed": false
+          },
+          "long_term_borrowings": {
+            "raw": "1000000.00",
+            "reviewed": false
+          },
+          "current_maturities": {
+            "raw": "300000.00",
+            "reviewed": false
+          }
+        }
+      },
+      {
+        "year_start": 2024,
+        "unit": "rupees",
+        "comparable_to_prior": true,
+        "values": {
+          "revenue": {
+            "raw": "12000000.00",
+            "reviewed": false
+          },
+          "profit_after_tax": {
+            "raw": "600000.00",
+            "reviewed": false
+          },
+          "ebit": {
+            "raw": "1200000.00",
+            "reviewed": false
+          },
+          "interest_expense": {
+            "raw": "400000.00",
+            "reviewed": false
+          },
+          "current_assets": {
+            "raw": "5000000.00",
+            "reviewed": false
+          },
+          "current_liabilities": {
+            "raw": "2500000.00",
+            "reviewed": false
+          },
+          "total_assets": {
+            "raw": "12000000.00",
+            "reviewed": false
+          },
+          "total_liabilities": {
+            "raw": "5000000.00",
+            "reviewed": false
+          },
+          "total_equity": {
+            "raw": "7000000.00",
+            "reviewed": false
+          },
+          "short_term_borrowings": {
+            "raw": "600000.00",
+            "reviewed": false
+          },
+          "long_term_borrowings": {
+            "raw": "1200000.00",
+            "reviewed": false
+          },
+          "current_maturities": {
+            "raw": "300000.00",
+            "reviewed": false
+          }
+        }
+      }
+    ]
+  }
+}
