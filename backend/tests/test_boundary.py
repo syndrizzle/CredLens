@@ -36,7 +36,7 @@ def test_health_and_openapi(client):
     assert client.get("/api/health").json() == {"status": "ok"}
     schema = client.get("/openapi.json").json()
     assert "/api/validate" in schema["paths"]
-    assert "/api/analysis" not in schema["paths"]
+    assert "/api/analysis" in schema["paths"]
 
 
 @pytest.mark.parametrize(
@@ -221,8 +221,8 @@ def test_decimal_result_serialization_and_state_invariants():
         }
     )
     assert unsupported.model_dump(mode="json")["value"] is None
-    with pytest.raises(ValidationError):
-        PeriodAnalysis(year_start=2023, indicators=[result] * 6)
+    with pytest.raises(ValidationError, match="six indicators"):
+        PeriodAnalysis(year_start=2023, indicators=[result] * 6, balance_check={"state": "Not assessed", "difference_inr": None, "tolerance_inr": Decimal("0.015"), "inputs": [], "reasons": []})
 
 
 @pytest.mark.parametrize("today,status", [("2026-03-31", 422), ("2026-04-01", 200)])

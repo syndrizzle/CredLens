@@ -1,6 +1,6 @@
 # CredLens backend
 
-P1-02 provides a local FastAPI application, validated schemas, and boundary tests. The calculation engine and `/api/analysis` endpoint are P1-03; they are not implemented yet. Use fictional data only: no persistence or authentication exists in this phase.
+P1-02 provides the local FastAPI application and validated schemas; P1-03 adds the deterministic calculation engine and `/api/analysis`. Use fictional data only: no persistence or authentication exists in this phase.
 
 ## Setup and run
 
@@ -28,6 +28,7 @@ Run tests from `backend/`:
 
 - `GET /api/health` returns `{"status":"ok"}`.
 - `POST /api/validate` validates a request and returns its canonical form, filling defaults while preserving raw amount text. This does not calculate ratios, normalize amounts, confirm review, or check balance-sheet consistency.
+- `POST /api/analysis` accepts the same request, normalizes amounts to INR, checks evidence and balance-sheet consistency, and returns all six indicators per year. It does not save or confirm submitted figures.
 - Invalid requests return HTTP 422 with `detail`, a list of `{loc, type, msg}` errors. `loc` identifies the field path. Submitted values and validator context are omitted from errors. No financial payloads are logged by application code.
 
 Example request:
@@ -49,28 +50,29 @@ Example request:
 }
 ```
 
-`year_start: 2023` means 1 April 2023 through 31 March 2024. Years must be complete as of the current date in India. Periods can arrive in any order; duplicate years are rejected. The engine will find the immediately preceding year rather than assuming array order.
+`year_start: 2023` means 1 April 2023 through 31 March 2024. Years must be complete as of the current date in India. Periods can arrive in any order; duplicate years are rejected. The engine finds the immediately preceding year rather than assuming array order, and returns periods in ascending order.
 
 Requests accept 1-3 periods, a business name of 1-120 non-whitespace characters, only INR/standalone basis, and units `rupees`, `thousands`, `lakhs`, or `crores`. Unknown properties and unknown financial field keys are rejected. Booleans/integers are strict: strings such as `"true"` and numeric amounts are not coerced.
 
-The allowed financial keys and financial rules are in the [confirmed contract](../docs/FINANCIAL_CONTRACT.md). `values` is a sparse dictionary: omitted fields are missing. Each supplied figure has `raw` (string or null), `reviewed` (default false), `revision` (positive integer, default 1), and `origin` (only `manual`). Empty/whitespace raw strings are missing, and cannot be marked reviewed. Missing and unreviewed inputs remain valid request data, to be explained by the later engine.
+The allowed financial keys and financial rules are in the [confirmed contract](../docs/FINANCIAL_CONTRACT.md). `values` is a sparse dictionary: omitted fields are missing. Each supplied figure has `raw` (string or null), `reviewed` (default false), `revision` (positive integer, default 1), and `origin` (only `manual`). Empty/whitespace raw strings are missing, and cannot be marked reviewed. Missing and unreviewed inputs remain valid request data; the engine explains which findings they block.
 
 Raw strings are limited to 64 characters including surrounding whitespace, and their trimmed form must have an optional sign, 1-15 ASCII integer digits, and optionally 1-2 decimal digits. Examples: `"0"`, `"-12.50"`, `" +0.10 "`. Commas, exponent notation, currency symbols, numeric JSON values, NaN, and infinity are rejected. Negative plain-decimal inputs are accepted for evidence review by P1-03, not silently changed or treated as automatically supported.
 
-The [fictional request fixture](tests/fixtures/aster_components.json) matches the contract's reference company and starts unreviewed. When changing this example, update the contract and fixture together. Expected financial calculations remain in the contract until implemented as P1-03 tests.
+The [fictional request fixture](tests/fixtures/aster_components.json) matches the contract's reference company and starts unreviewed. Confirm its figures before expecting supported results. When changing this example, update the contract, fixture, and [calculation tests](tests/test_analysis.py) together.
 
-## Calculation API contract for P1-03
+## Calculation API
 
-The next task will add `POST /api/analysis` using `AnalysisRequest` and `AnalysisResponse` in `app/schemas.py`. There is deliberately no calculation route returning placeholder results today.
+`POST /api/analysis` uses `AnalysisRequest` and `AnalysisResponse` in [app/schemas.py](app/schemas.py), backed by [app/analysis.py](app/analysis.py).
 
-- `AnalysisResponse`: `rule_version` (`financial-rules-v1`) and 1-3 period results.
+- `AnalysisResponse`: `rule_version` (`financial-rules-v1`), limitations (provisional rules, cash generation not assessed, lease exclusion), and 1-3 period results.
 - Each period result has `year_start` and exactly six distinct indicators: `revenue_growth`, `net_profit_margin`, `working_capital`, `current_ratio`, `debt_to_equity`, and `interest_coverage`.
+- Each period also has `balance_check`: evidence state, signed `difference_inr` (assets minus liabilities minus equity, or null when unchecked), `tolerance_inr`, input evidence, and reasons. Missing totals alone do not block indicators; confirmed balance/component conflicts block the three balance-sheet indicators.
 - Each indicator has `state`, `value`, `inputs`, `reasons`, and `next_step`. States use the four exact labels in the financial contract.
 - A supported result requires a finite decimal value; other states require null value and at least one reason. A reason contains a stable `code`, plain-language `message`, and affected `fields`.
 - Each input reference identifies year, field, unit, original figure/review/revision, and `normalized_inr`. Origin remains manual in Phase 1.
-- JSON serializes Decimal result values and normalized amounts as ordinary decimal strings, never floating-point numbers or scientific notation. Working capital is INR, growth/margin are percentages, and other indicators are ratios. Display rounding and deterministic Decimal arithmetic belong to the engine/UI tasks, not the request validator.
+- JSON serializes Decimal result values and normalized amounts as ordinary decimal strings, never floating-point numbers or scientific notation. Working capital is INR, growth/margin are percentages, and other indicators are ratios. The engine uses an isolated Decimal context with precision 34 and no intermediate display rounding. Two-decimal display formatting remains part of the future results UI.
 
-The schemas establish shape and local invariants. P1-03 must enforce dependency/state precedence, normalization, formula correctness, period/result correspondence, and consistency checks; schema validation alone does not establish financial correctness.
+The engine applies state precedence independently to each indicator: Needs review, Not assessed, Not meaningful, Supported. It retains all relevant reasons and only calculates supported results. Reason codes are `missing_input`, `unreviewed`, `negative_input`, `missing_prior_year`, `comparability_unconfirmed`, `invalid_denominator`, `balance_mismatch`, and `component_exceeds_total`. Next steps identify needed corrections/evidence or suggest investigation without lending thresholds or inferred causes. Arithmetic tests do not replace finance-reviewer validation.
 
 ## Dependency verification
 

@@ -2,7 +2,7 @@
 
 Task: P1-01. Status: **CONFIRMED for Phase 1 implementation**. Prepared and confirmed: 2026-11-07.
 
-This is the user-confirmed contract for the first usable workflow in [PROJECT_SPEC.md](PROJECT_SPEC.md). It turns the milestone proposal's six formulas into explicit inputs, review behaviour, and test expectations. P1-02 implements request/result schemas and boundary validation; the calculation engine and forms remain pending. Financial definitions remain provisional pending a finance reviewer; user confirmation is a product decision, not professional validation.
+This is the user-confirmed contract for the first usable workflow in [PROJECT_SPEC.md](PROJECT_SPEC.md). It turns the milestone proposal's six formulas into explicit inputs, review behaviour, and test expectations. P1-02 implements request/result schemas and boundary validation; P1-03 implements the calculation engine and API. Forms and results UI remain pending. Financial definitions remain provisional pending a finance reviewer; user confirmation is a product decision, not professional validation.
 
 ## First workflow
 
@@ -117,7 +117,7 @@ For internal P&L consistency, fictional tax expense is INR 300,000 and INR 200,0
 
 Expected supported finding: net profit margin decreased from 9.00% to 5.00%, a decrease of **4.00 percentage points**. Next step: review the P&L and supporting expense detail with an accountant. Do not state a cause from these totals alone.
 
-### Controlled variants for later tests
+### Controlled test variants
 
 Change one factor at a time from the reviewed reference case:
 
@@ -141,4 +141,4 @@ Change one factor at a time from the reviewed reference case:
 
 - The user confirmed these defaults on 2026-11-07: flow, April-March restriction, units, input mapping, rounding/tolerance, and state precedence. Decision D-01 is confirmed and P1-01 is complete. Finance-reviewer validation remains pending separately as D-02; do not describe the financial rules as professionally validated.
 - Fixture amounts and expected results are checked with independent Python `Decimal`/exact-fraction arithmetic during this task. This is arithmetic verification, not finance-reviewer validation or a test of an implemented engine.
-- P1-02 added the [machine-readable request fixture](../backend/tests/fixtures/aster_components.json), initially unreviewed, and [backend/API documentation](../backend/README.md). Keep the fixture and reference values synchronized. P1-03 must translate the expected calculations and controlled variants into engine tests; they are not implemented yet.
+- P1-02 added the [machine-readable request fixture](../backend/tests/fixtures/aster_components.json), initially unreviewed, and [backend/API documentation](../backend/README.md). Keep the fixture and reference values synchronized. P1-03 implemented the expected calculations and controlled variants in [engine tests](../backend/tests/test_analysis.py), including evidence isolation, mixed problems, units, precision, and consistency checks. The backend suite passes 108 tests on 2026-11-10; frontend workflow verification remains pending.

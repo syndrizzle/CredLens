@@ -2,7 +2,8 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from app.schemas import AnalysisRequest
+from app.analysis import analyse
+from app.schemas import AnalysisRequest, AnalysisResponse
 
 app = FastAPI(title="CredLens", version="0.1.0")
 
@@ -31,3 +32,8 @@ def health() -> dict[str, str]:
 @app.post("/api/validate", response_model=AnalysisRequest)
 def validate_figures(payload: AnalysisRequest) -> AnalysisRequest:
     return payload
+
+
+@app.post("/api/analysis", response_model=AnalysisResponse)
+def analyse_figures(payload: AnalysisRequest) -> AnalysisResponse:
+    return analyse(payload)

@@ -1,29 +1,29 @@
 # CredLens: project spec and progress tracker
 
-Last updated: 2026-11-07
+Last updated: 2026-11-10
 
 This is the living implementation plan. [AGENTS.md](../AGENTS.md) defines how to work; this file defines what to build, its completion criteria, and current progress. The [milestone-1 proposal](CredLens-Milestone-One-Report.pdf), especially sections 7, 8, 10, and 12, supplies the baseline requirements. Later explicit user decisions take precedence; record changes here.
 
 ## Start here
 
-- **Current stage:** Phase 1 backend foundation complete; ready for the calculation engine. Phase 0 complete. The frontend remains a placeholder.
-- **Active implementation task:** none. P1-02 is complete.
-- **Next task:** **P1-03**, implement the six deterministic calculations and evidence checks, then expose `/api/analysis`.
-- **Next product task:** **P1-03**, turn the confirmed contract and fictional fixture into tested financial analysis.
+- **Current stage:** Phase 1 backend calculations and evidence checks complete. Phase 0 complete. The frontend remains a placeholder.
+- **Active implementation task:** None; **P1-03** is complete.
+- **Next task:** **P1-04**, build the manual-entry and review UI with the existing shadcn preset.
+- **Next product task:** **P1-04**, enter/review one to three periods and load the labelled fictional example; connect analysis/results in P1-05.
 - **First usable milestone:** enter financial figures, confirm them, and see six indicator results with sources, blocked-input explanations, and useful next steps. This works without PDFs or an LLM.
 
-The build repair, confirmed financial contract, and backend foundation are complete. Continue with P1-03, then complete Phase 1 in small tasks. Do not build a landing page, chat interface, or upload pipeline before the core financial workflow works.
+The build repair, confirmed financial contract, backend foundation, and calculation engine are complete. Continue with P1-04, then complete Phase 1 in small tasks. Do not build a landing page, chat interface, or upload pipeline before the core financial workflow works.
 
 ### Verified repository baseline
 
-| Area | Observed on 2026-11-07 | Evidence |
+| Area | Latest verified state (updated 2026-11-10) | Evidence |
 | --- | --- | --- |
 | Frontend foundation | React/TypeScript/Vite, Tailwind, Base Nova shadcn preset, Hugeicons, theme tokens and Bun lockfile exist | `package.json`, `components.json`, `src/index.css`, `bun.lock` |
 | Application | Placeholder `Hello World`; button is the only installed UI component | `src/App.tsx`, `src/components/ui/button.tsx` |
 | Agent guidance | Repository instructions, host adapters, and Ponytail license exist | `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.cursor/rules/project.mdc`, `.github/copilot-instructions.md` |
 | Frontend lint | Completes with one `react(only-export-components)` warning on `buttonVariants` | `bun run lint`; warning at `src/components/ui/button.tsx:57` |
 | Frontend build | Passes after removing obsolete `baseUrl` from root/app TypeScript configs; `@/` imports resolve in TypeScript and Vite | `bun run build`; temporary alias probe compiled/type-checked and bundled without writing output, then removed |
-| Backend/data/AI | Minimal FastAPI backend with validation-only API, strict request/result schemas, fictional request fixture, and 52 passing boundary tests. No calculation engine, persistence, uploads, retrieval, or reports yet. | [Backend setup/API/dependency notes](../backend/README.md); `cd backend && .venv/bin/python -m pytest -q` |
+| Backend/data/AI | FastAPI validation and analysis APIs, strict schemas, six Decimal calculations, evidence/consistency checks, and fictional fixture. 108 passing tests (52 boundary, 56 calculation/API cases). No persistence, uploads, retrieval, or reports yet. | [Backend setup/API/dependency notes](../backend/README.md); `cd backend && .venv/bin/python -m pytest -q` |
 
 These observations do not certify runtime behaviour. Update them when implementation or verification changes them.
 
@@ -83,7 +83,7 @@ The confirmed contract sets mixed-problem precedence: Needs review, then Not ass
 ## Technical boundaries
 
 - Keep the existing frontend at the repository root. Prefer default shadcn components, existing theme tokens, Hugeicons, and local component state. Add libraries only for a demonstrated need.
-- Add a `backend/` directory when P1-02 begins. Use one FastAPI/Pydantic application, separate Python calculation functions, and Pytest. Introduce modules as their responsibilities appear; do not create empty architecture layers.
+- Keep one FastAPI/Pydantic application in `backend/`, separate Python calculation functions, and Pytest. Introduce modules as their responsibilities appear; do not create empty architecture layers.
 - Phase 1 is a local fictional-data prototype. Use request-scoped calculation data with no claim of saved accounts/workspaces; clearly show any unsaved state. Persistence and authentication arrive together in Phase 2 before private-data use.
 - Phase 2 adds PostgreSQL/SQLAlchemy/migrations. Add pgvector when retrieval needs it. Version reviewed values and analysis outputs; enforce ownership in backend queries, file access, and retrieval.
 - Phase 3 adds pdfplumber for supported digital layouts, protected file storage, page-linked extraction, and one bounded job at a time.
@@ -112,7 +112,7 @@ The confirmed contract sets mixed-problem precedence: Needs review, then Not ass
 | --- | --- | --- | --- |
 | P1-01 | DONE | Freeze required inputs, period/unit handling, formulas, sign rules, precision/rounding, balance tolerance, review action, and evidence-state precedence. Define one balanced fictional company with two comparable years and independently checked expected results. | User-confirmed [FINANCIAL_CONTRACT.md](FINANCIAL_CONTRACT.md), including two-year reference inputs, expected results, and controlled variants. Decimal/exact-fraction arithmetic checks passed during drafting. D-01 confirmed on 2026-11-07; finance-reviewer validation remains pending as D-02. |
 | P1-02 | DONE | Initialize the minimal Python backend and test setup; define validated request/result schemas, decimal serialization, limits, structured errors, and the calculation API contract. | [Backend](../backend/README.md) implements health/validation endpoints, strict schemas, raw amount preservation, Decimal JSON output, sanitized 422 errors, and the fictional request fixture. 52 tests pass; `pip check` passes. Python 3.14.8 tested; all dependencies pinned from the installed set and checked online against PyPI. Calculation route belongs to P1-03. |
-| P1-03 | TODO | Implement the six deterministic indicators and minimal input/evidence checks against the agreed fixture, then expose them through the calculation endpoint. Return result/state, input references, formula version, and blocked reason. | At least 30 meaningful assertions spanning formulas, units, missing/unreviewed values, signs, zero denominators, equity, and period comparability; all pass. |
+| P1-03 | DONE | Implement the six deterministic indicators and minimal input/evidence checks against the agreed fixture, then expose them through the calculation endpoint. Return result/state, input references, formula version, and blocked reason. | [Engine](../backend/app/analysis.py) and `/api/analysis` implemented; [56 calculation/API cases](../backend/tests/test_analysis.py) pass, exceeding the 30-assertion target. Covers reference results, mixed units/states, missing/unreviewed inputs, signs, zero denominators, equity, consecutive/comparable years, balance tolerance/conflicts, revision evidence, and isolated Decimal precision. Full backend suite: 108 pass. |
 | P1-04 | TODO | Replace `Hello World` with accessible manual-entry and review components using the configured shadcn preset. Support one to three periods, optional/missing values, explicit confirmation, and clearly labelled fictional-example loading. | Keyboard/label checks; blanks stay missing; values survive validation errors; unsaved state is clear. No custom design system or extra dashboard sections. |
 | P1-05 | TODO | Connect entry/review to Python analysis and display all six results with evidence text, units/periods, inputs, and targeted next steps. | Loading/error/retry states work; server errors preserve entered data; editing figures invalidates stale displayed results until re-analysis. No frontend duplicate formula engine. |
 | P1-06 | TODO | Verify the complete manual-entry case and its controlled missing-interest variant. Record the walkthrough and automated checks with FR04-08 / NFR01/04/05 references. | Expected results match; removing interest blocks only coverage; restoring it changes coverage; one-year growth is not assessed; zero denominators and non-positive equity are explained. |
@@ -176,7 +176,7 @@ The confirmed contract sets mixed-problem precedence: Needs review, then Not ass
 
 ## Decisions to resolve
 
-P1-01 and D-01 are confirmed; finance review remains pending independently as D-02. Backend validation foundation is implemented; the financial engine and frontend workflow remain pending. Resolve each item before its consuming task; do not treat pending later-phase choices as permission to stop independent earlier work.
+P1-01 and D-01 are confirmed; finance review remains pending independently as D-02. Backend validation and financial calculations are implemented; the frontend workflow remains pending. Resolve each item before its consuming task; do not treat pending later-phase choices as permission to stop independent earlier work.
 
 | ID | State | Decision needed | Resolve before |
 | --- | --- | --- | --- |
@@ -193,7 +193,6 @@ P1-01 and D-01 are confirmed; finance review remains pending independently as D-
 | 2026-11-07 | Use one repository spec/progress tracker and require an update after every task. | Task IDs, current stage, decisions, evidence, and handoffs live here; `AGENTS.md` points to this file. |
 | 2026-11-07 | Repair baseline build before product work, then follow the proposal's manual-first five phases. | P0-03 is next; PDF/AI features follow a working deterministic financial workflow. |
 | 2026-11-07 | User confirmed the P1-01 financial-contract defaults for initial implementation. | D-01 resolved and P1-01 complete; proceed to P1-02. Finance review (D-02) remains pending. |
-
 | 2026-11-07 | Use Python 3.14 with isolated venv/pip and pinned backend requirements. Verify current dependency releases online before additions/upgrades, as explicitly requested by the user. | P1-02 establishes the tooling; `AGENTS.md` requires registry/runtime/compatibility verification and provenance for future dependency changes. |
 
 ## Task log
@@ -207,3 +206,4 @@ Append a row after each task. Include task ID (or add one), actual completion da
 | 2026-11-07 | P1-01 (in progress) | Drafted `docs/FINANCIAL_CONTRACT.md` with the input/review flow, field dictionary, formula dependencies, sign/rounding/tolerance rules, state precedence, balanced two-year fictional case, and controlled variants. Parsed reference amounts and checked balances, P&L, expected calculations, exact-fraction cross-checks, unit normalization, and percentage-point change using standard-library Python. Local links and `git diff --check` pass. | User confirmation of D-01 pending; no backend/UI or automated engine tests implemented. Finance review remains pending separately. |
 | 2026-11-07 | P1-01 (complete) | Recorded user acceptance of the financial-contract defaults, changed the contract to confirmed, resolved D-01, and marked P1-01 DONE. Prior arithmetic verification retained; local links, status consistency, and `git diff --check` verified on this update. | Next P1-02: minimal backend and validated schemas. No application code changed or tests rerun; finance review remains pending as D-02. |
 | 2026-11-07 | P1-02 | Added minimal FastAPI health/validation API, strict financial request/result schemas, decimal-string serialization, redacted validation errors, and the fictional request fixture. Added run/API/dependency notes, pinned requirements, Python cache ignores, and a mandatory online dependency-check rule. Live PyPI metadata confirms direct versions/runtime constraints; `pip list --outdated --format=json` returns `[]`; `pip check` passes. Backend: 52 tests pass without warnings. Frontend: lint completes with existing shadcn warning; build passes. Documentation/fixture consistency and `git diff --check` pass. | Next P1-03: calculations/evidence checks and `/api/analysis`. No persistence, authentication, frontend integration, or finance-reviewer validation. Python on this host initially lacked ensurepip; pip was bootstrapped only inside the project venv. |
+| 2026-11-10 | P1-03 | Added six Decimal calculations, INR normalization, independent evidence-state precedence, consecutive-year checks, balance tolerance/component conflicts, input/revision evidence, targeted next steps, and `/api/analysis`. Responses include rule version and provisional/cash-flow/lease limitations. Added 56 calculation/API cases; `cd backend && .venv/bin/python -m pytest -q`: 108 pass. `bun run lint` completes with the existing shadcn warning; `bun run build` passes. Documentation links and `git diff --check` pass. No dependencies added/upgraded. | Next P1-04: manual-entry/review UI. No browser walkthrough, frontend integration, persistence, authentication, or finance-reviewer validation; local fictional-data scope remains. |

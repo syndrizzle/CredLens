@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "skills": {
+    "install-anti-slop": {
+      "source": "dmmulroy/anti-slop",
+      "sourceType": "github",
+      "skillPath": "skills/install-anti-slop/SKILL.md",
+      "computedHash": "1b9b5d3c0d9e0ef8dd7631f4d637e66b62a73e34dceaf4ae07c0d3de376fd7d7"
+    },
+    "stageshow": {
+      "source": "benjitaylor/skills",
+      "sourceType": "github",
+      "skillPath": "stageshow/SKILL.md",
+      "computedHash": "92725a1d58ce8fbc9b80bd117b4a78feefa230e0feb24865b70c9ed1cfdb581b"
+    },
+    "untangle-codebase": {
+      "source": "caldoai/skills",
+      "sourceType": "github",
+      "skillPath": "skills/untangle-codebase/SKILL.md",
+      "computedHash": "d5e9e1c4a1f30f34c0120dea773d0170004d6c19ef5e8f236c35773bd6c5bdbc"
+    }
+  }
+}

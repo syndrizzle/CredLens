@@ -113,9 +113,18 @@ class IndicatorResult(Model):
         return self
 
 
+class BalanceCheck(Model):
+    state: EvidenceState
+    difference_inr: DecimalValue | None
+    tolerance_inr: DecimalValue
+    inputs: list[InputEvidence]
+    reasons: list[Reason]
+
+
 class PeriodAnalysis(Model):
     year_start: int
     indicators: list[IndicatorResult] = Field(min_length=6, max_length=6)
+    balance_check: BalanceCheck
 
     @model_validator(mode="after")
     def distinct_indicators(self) -> Self:
@@ -126,4 +135,9 @@ class PeriodAnalysis(Model):
 
 class AnalysisResponse(Model):
     rule_version: Literal["financial-rules-v1"] = "financial-rules-v1"
+    limitations: list[str] = Field(default_factory=lambda: [
+        "Financial rules are provisional pending finance-reviewer validation.",
+        "Cash generation is not assessed; no cash-flow statement was analysed.",
+        "Borrowings exclude leases and count current maturities once.",
+    ])
     periods: list[PeriodAnalysis] = Field(min_length=1, max_length=3)
