@@ -36,7 +36,7 @@ bun install --frozen-lockfile
 bun run dev
 ```
 
-Open the URL Vite prints. Its development proxy forwards `/api` to the local backend on port 8000. Load the labelled fictional example, review/confirm figures, then select **Analyse figures**. Unconfirmed/missing inputs show their own evidence states; edits hide outdated results until re-analysis. Entries and results are unsaved.
+Open the URL Vite prints. Its development proxy forwards `/api` to the local backend on port 8000. Load the labelled fictional example, review/confirm figures, then select **Analyse figures**. Unconfirmed/missing inputs show their own evidence states; edits hide outdated results until re-analysis. Without signing in, entries and results remain unsaved; when `DATABASE_URL` is configured and migrated, you can create a local account or sign in to save and reload owner-protected workspaces.
 
 Run `bun test` (requires the configured `backend/.venv`, as integration tests invoke Python), `bun run lint`, and `bun run build`. Full backend tests: `cd backend && .venv/bin/python -m pytest -q`. The Vite proxy is for development; production hosting/routing remains future scope.
 

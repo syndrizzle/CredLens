@@ -8,6 +8,17 @@ def created_at():
     return Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now())
 
 owners = Table("owners", metadata, Column("id", Uuid, primary_key=True), created_at())
+accounts = Table("accounts", metadata,
+    Column("owner_id", Uuid, ForeignKey("owners.id", ondelete="CASCADE"), primary_key=True),
+    Column("email", String(254), nullable=False, unique=True),
+    Column("password_hash", Text, nullable=False), created_at(),
+    CheckConstraint("email = lower(btrim(email)) AND position('@' in email) > 1", name="account_email"),
+    CheckConstraint("password_hash LIKE 'scrypt$%'", name="account_password_hash"))
+sessions = Table("sessions", metadata,
+    Column("token_hash", String(64), primary_key=True),
+    Column("owner_id", Uuid, ForeignKey("owners.id", ondelete="CASCADE"), nullable=False, index=True),
+    Column("expires_at", DateTime(timezone=True), nullable=False), created_at(),
+    CheckConstraint("length(token_hash) = 64", name="session_token_hash"))
 businesses = Table("businesses", metadata,
     Column("id", Uuid, primary_key=True),
     Column("owner_id", Uuid, ForeignKey("owners.id"), nullable=False, index=True),

@@ -2,6 +2,7 @@ from datetime import date, datetime
 from decimal import Decimal
 import re
 from typing import Annotated, Literal, Self
+from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, Field, PlainSerializer, StringConstraints, field_validator, model_validator
@@ -141,3 +142,34 @@ class AnalysisResponse(Model):
         "Borrowings exclude leases and count current maturities once.",
     ])
     periods: list[PeriodAnalysis] = Field(min_length=1, max_length=3)
+
+
+class CredentialsRequest(Model):
+    email: Annotated[str, StringConstraints(strip_whitespace=True, to_lower=True, min_length=3, max_length=254)]
+    password: Annotated[str, StringConstraints(min_length=12, max_length=128)]
+
+    @field_validator("email")
+    @classmethod
+    def check_email(cls, value: str) -> str:
+        if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", value):
+            raise ValueError("Enter a valid email address")
+        return value
+
+
+class SessionResponse(Model):
+    owner_id: UUID
+    email: str
+
+
+class BusinessSummary(Model):
+    id: UUID
+    business_name: str
+    input_revision: int
+
+
+class WorkspaceResponse(Model):
+    business_id: UUID
+    input_revision: int
+    request: AnalysisRequest
+    latest_run_id: UUID | None = None
+    latest_analysis: AnalysisResponse | None = None

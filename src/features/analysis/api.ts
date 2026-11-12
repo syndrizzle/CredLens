@@ -1,4 +1,11 @@
-import { FINANCIAL_FIELDS, type FormDraft, type FinancialFieldKey, type Unit } from "../manual-entry/model";
+import {
+  FINANCIAL_FIELDS,
+  formFromRequest,
+  type FormDraft,
+  type FinancialFieldKey,
+  type RequestPayload,
+  type Unit,
+} from "../manual-entry/model";
 
 export const INDICATORS = {
   revenue_growth: { label: "Revenue growth", formula: "100 × (current revenue − prior revenue) ÷ prior revenue", unit: "%" },
@@ -27,8 +34,15 @@ export type AnalysisResponse = {
     inputs: InputEvidence[]; reasons: Reason[];
   } }[];
 };
+export type SessionUser = { owner_id: string; email: string };
+export type BusinessSummary = { id: string; business_name: string; input_revision: number };
+export type WorkspaceResponse = {
+  business_id: string; input_revision: number;
+  request: RequestPayload;
+  latest_run_id: string | null; latest_analysis: AnalysisResponse | null;
+};
 
-export function analysisRequest(form: FormDraft) {
+export function analysisRequest(form: FormDraft): RequestPayload {
   return {
     business_name: form.businessName.trim(), currency: "INR", basis: "standalone",
     periods: form.periods.map(period => ({
@@ -67,6 +81,66 @@ export async function fetchAnalysis(form: FormDraft, signal: AbortSignal): Promi
   return body;
 }
 
+export async function fetchSession(): Promise<SessionUser | null> {
+  const response = await fetch("/api/auth/session", { credentials: "same-origin" });
+  if (response.status === 401) return null;
+  if (!response.ok) throw new Error("Account service is unavailable. Check that the backend and database are running.");
+  return response.json() as Promise<SessionUser>;
+}
+
+export async function submitCredentials(mode: "login" | "register", email: string, password: string): Promise<SessionUser> {
+  const response = await fetch(`/api/auth/${mode}`, {
+    method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+  if (response.status === 401) throw new Error("Invalid email or password.");
+  if (response.status === 409) throw new Error("An account with this email already exists. Sign in instead.");
+  if (response.status === 422) throw new Error("Enter a valid email address and a password of 12 to 128 characters.");
+  if (!response.ok) throw new Error("Account service is unavailable. Check that the backend and database are running.");
+  return response.json() as Promise<SessionUser>;
+}
+
+export async function signOut(): Promise<void> {
+  await fetch("/api/auth/logout", { method: "POST", credentials: "same-origin" });
+}
+
+export async function fetchBusinesses(): Promise<BusinessSummary[]> {
+  const response = await fetch("/api/businesses", { credentials: "same-origin" });
+  if (response.status === 401) throw new Error("Your session expired. Sign in again.");
+  if (!response.ok) throw new Error("Could not load saved workspaces.");
+  return response.json() as Promise<BusinessSummary[]>;
+}
+
+export async function saveWorkspace(form: FormDraft): Promise<WorkspaceResponse> {
+  const response = await fetch("/api/businesses", {
+    method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(analysisRequest(form)),
+  });
+  return parseWorkspace(response);
+}
+
+export async function fetchWorkspace(businessId: string): Promise<WorkspaceResponse> {
+  const response = await fetch(`/api/businesses/${encodeURIComponent(businessId)}`, { credentials: "same-origin" });
+  return parseWorkspace(response);
+}
+
+export async function analyseWorkspace(businessId: string): Promise<WorkspaceResponse> {
+  const response = await fetch(`/api/businesses/${encodeURIComponent(businessId)}/analysis`, {
+    method: "POST", credentials: "same-origin",
+  });
+  return parseWorkspace(response);
+}
+
+async function parseWorkspace(response: Response): Promise<WorkspaceResponse> {
+  if (response.status === 401) throw new Error("Your session expired. Sign in again.");
+  if (response.status === 404) throw new Error("Workspace not found.");
+  if (response.status === 422) throw new Error("The server rejected these entries. Check the business, completed years, and amount format.");
+  if (!response.ok) throw new Error("Workspace service is unavailable. Check that the local backend and database are running.");
+  const body: unknown = await response.json();
+  if (!validWorkspace(body)) throw new Error("The server returned an invalid workspace payload.");
+  return body;
+}
+
 const decimal = (value: unknown): value is string => typeof value === "string" && /^[+-]?\d+(\.\d+)?$/.test(value);
 const record = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 const state = (value: unknown) => ["Supported", "Needs review", "Not assessed", "Not meaningful"].includes(value as string);
@@ -80,6 +154,19 @@ function inputs(value: unknown): boolean {
     (item.figure.raw === null || typeof item.figure.raw === "string") && typeof item.figure.reviewed === "boolean" &&
     Number.isInteger(item.figure.revision) && Number(item.figure.revision) > 0 && item.figure.origin === "manual" &&
     (item.normalized_inr === null || decimal(item.normalized_inr)));
+}
+function validRequest(value: unknown): value is RequestPayload {
+  return record(value) && typeof value.business_name === "string" && value.business_name.trim().length > 0 &&
+    value.currency === "INR" && value.basis === "standalone" && Array.isArray(value.periods) &&
+    value.periods.length >= 1 && value.periods.length <= 3 &&
+    value.periods.every(period => record(period) && Number.isInteger(period.year_start) &&
+      ["rupees", "thousands", "lakhs", "crores"].includes(period.unit as string) &&
+      typeof period.comparable_to_prior === "boolean" && record(period.values));
+}
+function validWorkspace(value: unknown): value is WorkspaceResponse {
+  if (!record(value) || typeof value.business_id !== "string" || !Number.isInteger(value.input_revision) || !validRequest(value.request)) return false;
+  if (value.latest_analysis === null || value.latest_analysis === undefined) return true;
+  return validResponse(value.latest_analysis, formFromRequest(value.request));
 }
 function validResponse(value: unknown, form: FormDraft): value is AnalysisResponse {
   if (!record(value) || value.rule_version !== "financial-rules-v1" || !Array.isArray(value.limitations) ||

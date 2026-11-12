@@ -1,6 +1,6 @@
 # CredLens backend
 
-The backend provides FastAPI validation and deterministic financial analysis. P2-01 adds PostgreSQL persistence and Alembic migrations for internal backend callers. Authentication and public save/load routes remain P2-02; use fictional data only.
+The backend provides FastAPI validation, deterministic financial analysis, PostgreSQL persistence/migrations (P2-01), and FastAPI-managed local accounts, server sessions, and owner-scoped workspace endpoints (P2-02). Use fictional data until full Phase 2 verification is complete.
 
 ## Setup and run
 
@@ -29,7 +29,16 @@ Run tests from `backend/`:
 - `GET /api/health` returns `{"status":"ok"}`.
 - `POST /api/validate` validates a request and returns its canonical form, filling defaults while preserving raw amount text. This does not calculate ratios, normalize amounts, confirm review, or check balance-sheet consistency.
 - `POST /api/analysis` accepts the same request, normalizes amounts to INR, checks evidence and balance-sheet consistency, and returns all six indicators per year. It does not save or confirm submitted figures.
-- Invalid requests return HTTP 422 with `detail`, a list of `{loc, type, msg}` errors. `loc` identifies the field path. Submitted values and validator context are omitted from errors. No financial payloads are logged by application code.
+- `POST /api/auth/register` creates an owner and account (`email`, `password` of 12–128 characters), hashes the password with standard-library `hashlib.scrypt` (`n=16384, r=8, p=1, dklen=32`), creates a 7-day server session, sets the `HttpOnly` `credlens_session` cookie, and returns `{"owner_id","email"}` (HTTP 201, or 409 if the email is already registered).
+- `POST /api/auth/login` verifies credentials in constant time, sets the session cookie, and returns `{"owner_id","email"}` (HTTP 200, or uniform 401 `{"detail":"Invalid email or password"}`).
+- `POST /api/auth/logout` deletes the server session and clears the session cookie.
+- `GET /api/auth/session` returns `{"owner_id","email"}` for a valid active session or HTTP 401.
+- `GET /api/businesses` lists the authenticated owner's saved businesses (`[{"id","business_name","input_revision"}]`).
+- `POST /api/businesses` atomically saves a validated `AnalysisRequest` under the session owner and returns the `WorkspaceResponse` (`business_id`, `input_revision`, `request`, `latest_run_id`, `latest_analysis`).
+- `GET /api/businesses/{business_id}` loads an owned workspace and its latest analysis run, or returns HTTP 404 (`{"detail":"Business not found"}`) for both unknown and other-owner IDs.
+- `POST /api/businesses/{business_id}/analysis` runs deterministic analysis on the saved business, persists the versioned `analysis_runs` snapshot, and returns the updated `WorkspaceResponse` (or HTTP 404).
+- `GET /api/analysis-runs/{run_id}` loads a saved `AnalysisResponse` if owned by the session user, or returns HTTP 404 (`{"detail":"Analysis not found"}`).
+- Invalid requests return HTTP 422 with `detail`, a list of `{loc, type, msg}` errors. `loc` identifies the field path. Submitted values (including passwords, emails, and financial figures) and validator context are omitted from errors. No financial payloads or credentials are logged by application code.
 
 Example request:
 
@@ -107,7 +116,7 @@ The CLI writes connection credentials into ignored `.env.local` (or `.env` if pr
 
 `app/database.py` uses SQLAlchemy with Psycopg 3 over TLS. The application uses pooled `DATABASE_URL` with `NullPool` locally to avoid a second idle pool. Connection attempts have a 10-second timeout, prepared statement caching is disabled for pooling compatibility, and SQL parameters are hidden. Keep `DATABASE_URL_UNPOOLED` for migrations in P2-01. These are server variables, never `VITE_` variables or browser connections. See [Neon's connection guide](https://neon.com/docs/connect/choose-connection) and [SQLAlchemy's Psycopg dialect](https://docs.sqlalchemy.org/en/21/dialects/postgresql.html#module-sqlalchemy.dialects.postgresql.psycopg).
 
-Start FastAPI and Vite using the existing commands, then check `GET /api/health/database` through Vite's `/api` proxy. Success is `{"status":"ok","database":"connected"}`; missing/invalid credentials or connection failures return sanitized HTTP 503. `/api/health` remains a database-independent liveness check. Financial analysis remains request-scoped and unsaved; connecting the database does not implement business persistence or authentication.
+Start FastAPI and Vite using the existing commands, then check `GET /api/health/database` through Vite's `/api` proxy. Success is `{"status":"ok","database":"connected"}`; missing/invalid credentials or connection failures return sanitized HTTP 503. `/api/health` remains a database-independent liveness check.
 
 For opt-in live verification from `backend/`:
 
@@ -131,9 +140,9 @@ New dependencies were checked against the official registries on 2026-11-12 and 
 The CLI installed Neon plugins/skills at user scope for detected agents and configured their Neon MCP access. Those global installations are not repository content; backend connectivity uses ordinary environment variables and Psycopg and does not require an AI plugin. Bun remains the project package manager and `bun.lock` remains the only JavaScript lockfile.
 
 
-## Persistence and migrations (P2-01)
+## Persistence, migrations, and authentication (P2-01 / P2-02)
 
-See [the persistence contract](../docs/PERSISTENCE_PLAN.md). `app/models.py` defines five tables: owners, businesses, periods, figures, and analysis_runs. Financial amounts use PostgreSQL NUMERIC; raw strings, missing values, units/multipliers, review state, and revisions are preserved. Analysis runs store the input revision, rule version, input snapshot, full findings/evidence, and timestamp in JSONB with decimal strings. P2-04 adds corrections and supersession.
+See [the persistence and authentication contract](../docs/PERSISTENCE_PLAN.md). `app/models.py` defines seven tables: `owners`, `accounts`, `sessions`, `businesses`, `periods`, `figures`, and `analysis_runs`. Financial amounts use PostgreSQL NUMERIC; raw strings, missing values, units/multipliers, review state, and revisions are preserved. Analysis runs store the input revision, rule version, input snapshot, full findings/evidence, and timestamp in JSONB with decimal strings. `accounts` and `sessions` store `scrypt` password hashes and SHA-256 session token digests using Python standard-library `hashlib` and `secrets` (no new dependencies). P2-04 adds corrections and supersession.
 
 Run migrations from `backend/` using the **direct** URL in `DATABASE_URL_UNPOOLED`:
 
@@ -143,14 +152,14 @@ Run migrations from `backend/` using the **direct** URL in `DATABASE_URL_UNPOOLE
 .venv/bin/python -m alembic check
 ```
 
-Environment variables take precedence over the root env file. To test a migration, obtain a disposable branch's direct URL securely and set both `DATABASE_URL_UNPOOLED` and `PERSISTENCE_TEST_URL` to that branch. Never print or commit these URLs. Run:
+Environment variables take precedence over the root env file. To test migrations and live persistence/authentication, set both `DATABASE_URL_UNPOOLED` and `PERSISTENCE_TEST_URL` to a migrated PostgreSQL test database. Never print or commit these URLs. Run:
 
 ```bash
 .venv/bin/python -m alembic upgrade head
-.venv/bin/python -m pytest tests/test_persistence.py -q
+.venv/bin/python -m pytest tests/test_persistence.py tests/test_auth.py -q
 ```
 
-The persistence tests commit fictional records to verify reload across connections, then remove only their own generated owner/business records. They skip unless `PERSISTENCE_TEST_URL` is set, and expect the database to be migrated already. Test `alembic downgrade base` then `upgrade head` only on a disposable branch: downgrade destroys these tables and their data. Default application startup never migrates automatically.
+The persistence and authentication tests commit fictional records and temporary accounts to verify reload and owner isolation across connections, then remove only their own generated owner/account/session/business records. Live database cases skip unless `PERSISTENCE_TEST_URL` is set, and expect the database to be migrated already. Test `alembic downgrade` only on a disposable branch: downgrade drops tables and their data. Default application startup never migrates automatically.
 
 To load the unreviewed fictional Aster Components fixture into the database selected by `DATABASE_URL`:
 
@@ -158,8 +167,8 @@ To load the unreviewed fictional Aster Components fixture into the database sele
 .venv/bin/python -m app.seed
 ```
 
-This is idempotent for the fixed demonstration owner and company name. It creates an internal owner ID, not a login account; do not associate that owner with real users. It does not confirm figures or replace existing data. This seed was exercised only on the disposable branch; production received empty tables.
+This is idempotent for the fixed demonstration owner and company name. It creates an internal owner ID without an `accounts` row, not a login account; do not associate that owner with real users. It does not confirm figures or replace existing data.
 
-`app/persistence.py` exposes `save_business`, `load_business`, `save_analysis`, and `load_analysis` for backend callers. Use `with get_engine().begin() as connection:` for writes so a complete business or analysis is committed atomically. Reads and analysis operations require an owner ID and enforce it in database queries. P2-02 must derive that ID from a verified server session. No public saved-record routes or browser saving exist yet; the current UI remains explicitly unsaved. FastAPI-managed accounts were selected by the user for P2-02.
+`app/persistence.py` exposes `save_business`, `load_business`, `save_analysis`, `load_analysis`, `list_businesses`, and `load_workspace` for backend callers, and `app/auth.py` exposes `hash_password`, `verify_password`, `register_account`, `authenticate_account`, `resolve_session`, and `revoke_session`. Every protected HTTP route in `app/main.py` derives `owner_id` from the verified `credlens_session` cookie inside a transaction.
 
-Dependency verification (2026-11-12): [Alembic 1.20.1](https://pypi.org/pypi/alembic/json), Python >=3.10 and SQLAlchemy >=2.0, is compatible with installed SQLAlchemy 2.1.8/Python 3.14.8. Resolved transitive Mako 1.4.3 and MarkupSafe 3.0.4 are pinned alongside it. Migration setup follows the [official Alembic tutorial](https://alembic.sqlalchemy.org/en/latest/tutorial.html). Existing dependencies were not upgraded.
+Dependency verification (2026-11-12): [Alembic 1.20.1](https://pypi.org/pypi/alembic/json), Python >=3.10 and SQLAlchemy >=2.0, is compatible with installed SQLAlchemy 2.1.8/Python 3.14.8 and 3.12.2. Resolved transitive Mako 1.4.3 and MarkupSafe 3.0.4 are pinned alongside it. Migration setup follows the [official Alembic tutorial](https://alembic.sqlalchemy.org/en/latest/tutorial.html). Existing dependencies were not upgraded.

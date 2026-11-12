@@ -113,3 +113,45 @@ test("forwards cancellation signal to fetch", async () => {
   }) as typeof fetch;
   await expect(fetchAnalysis(reviewed(), controller.signal)).rejects.toThrow();
 });
+
+test("workspace and auth client handles round-trip, auth errors, and cross-owner 404s", async () => {
+  const {
+    analyseWorkspace,
+    fetchBusinesses,
+    fetchSession,
+    fetchWorkspace,
+    saveWorkspace,
+    submitCredentials,
+  } = await import("../src/features/analysis/api");
+  const { formFromRequest } = await import("../src/features/manual-entry/model");
+
+  const form = reviewed();
+  const payload = analysisRequest(form);
+  const roundTripped = formFromRequest(payload);
+  expect(analysisRequest(roundTripped)).toEqual(payload);
+
+  respond({ detail: "Authentication required" }, 401);
+  expect(await fetchSession()).toBeNull();
+  await expect(submitCredentials("login", "user@example.com", "wrong-password-123")).rejects.toThrow("Invalid email or password.");
+  await expect(fetchBusinesses()).rejects.toThrow("expired");
+
+  respond({ detail: "Account already exists" }, 409);
+  await expect(submitCredentials("register", "user@example.com", "valid-password-123")).rejects.toThrow("already exists");
+
+  respond({ detail: "Business not found" }, 404);
+  await expect(fetchWorkspace("00000000-0000-0000-0000-000000000000")).rejects.toThrow("Workspace not found.");
+
+  const analysis = engine(form);
+  respond({
+    business_id: "11111111-1111-1111-1111-111111111111",
+    input_revision: 1,
+    request: payload,
+    latest_run_id: "22222222-2222-2222-2222-222222222222",
+    latest_analysis: analysis,
+  }, 201);
+  const saved = await saveWorkspace(form);
+  expect(saved.business_id).toBe("11111111-1111-1111-1111-111111111111");
+  expect(saved.latest_analysis?.periods).toHaveLength(2);
+  const analysed = await analyseWorkspace(saved.business_id);
+  expect(analysed.latest_run_id).toBe("22222222-2222-2222-2222-222222222222");
+});

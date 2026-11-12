@@ -388,3 +388,51 @@ export function createExampleForm(): FormDraft {
     ],
   };
 }
+
+export type RequestPayload = {
+  business_name: string;
+  currency: "INR";
+  basis: "standalone";
+  periods: {
+    year_start: number;
+    unit: Unit;
+    comparable_to_prior: boolean;
+    values: Partial<
+      Record<
+        FinancialFieldKey,
+        {
+          raw: string | null;
+          reviewed: boolean;
+          revision: number;
+          origin: "manual";
+        }
+      >
+    >;
+  }[];
+};
+
+export function formFromRequest(request: RequestPayload): FormDraft {
+  return {
+    businessName: request.business_name,
+    periods: request.periods.map((period) => ({
+      id: nextPeriodId(),
+      yearStart: period.year_start,
+      unit: period.unit,
+      comparableToPrior: period.comparable_to_prior,
+      figures: Object.fromEntries(
+        FINANCIAL_FIELDS.map((field) => {
+          const item = period.values[field.key];
+          const raw = item?.raw ?? "";
+          return [
+            field.key,
+            {
+              raw,
+              reviewed: Boolean(raw.trim()) && Boolean(item?.reviewed),
+              revision: item?.revision ?? 1,
+            },
+          ];
+        }),
+      ) as Record<FinancialFieldKey, FigureDraft>,
+    })),
+  };
+}

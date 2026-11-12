@@ -1,6 +1,19 @@
 import { AnalysisResults } from "../analysis/AnalysisResults";
+import {
+  analyseWorkspace,
+  fetchBusinesses,
+  fetchSession,
+  fetchWorkspace,
+  saveWorkspace,
+  signOut,
+  submitCredentials,
+  type AnalysisResponse,
+  type BusinessSummary,
+  type SessionUser,
+  type WorkspaceResponse,
+} from "../analysis/api";
 import { useAnalysis } from "../analysis/use-analysis";
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   Add01Icon,
@@ -42,6 +55,7 @@ import {
   createPeriod,
   financialYearLabel,
   firstErrorId,
+  formFromRequest,
   hasEntries,
   hasErrors,
   immediatePrior,
@@ -67,6 +81,21 @@ function ManualEntry() {
   const [showErrors, setShowErrors] = useState(false);
   const [confirmExample, setConfirmExample] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [session, setSession] = useState<SessionUser | null>(null);
+  const [authMode, setAuthMode] = useState<"login" | "register">("login");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [authBusy, setAuthBusy] = useState(false);
+  const [businesses, setBusinesses] = useState<BusinessSummary[]>([]);
+  const [activeWorkspace, setActiveWorkspace] = useState<{
+    id: string;
+    revision: number;
+    form: FormDraft;
+    analysis: AnalysisResponse | null;
+  } | null>(null);
+  const [workspaceBusy, setWorkspaceBusy] = useState(false);
+  const [workspaceError, setWorkspaceError] = useState<string | null>(null);
 
   const analysis = useAnalysis(form);
   const periods = sortedPeriods(form.periods);
@@ -74,6 +103,144 @@ function ManualEntry() {
   const counts = countReview(form.periods);
   const allPresentReviewed =
     counts.present > 0 && counts.reviewed === counts.present;
+  const savedClean = activeWorkspace !== null && activeWorkspace.form === form;
+  const displayedAnalysis =
+    savedClean && activeWorkspace.analysis && !analysis.data
+      ? activeWorkspace.analysis
+      : analysis.data;
+
+  useEffect(() => {
+    let active = true;
+    fetchSession()
+      .then((user) => {
+        if (!active || !user) return;
+        setSession(user);
+        return fetchBusinesses().then((items) => {
+          if (active) setBusinesses(items);
+        });
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  function applyWorkspace(workspace: WorkspaceResponse, message: string) {
+    const nextForm = formFromRequest(workspace.request);
+    setForm(nextForm);
+    setActiveWorkspace({
+      id: workspace.business_id,
+      revision: workspace.input_revision,
+      form: nextForm,
+      analysis: workspace.latest_analysis,
+    });
+    setBusinesses((current) => {
+      const summary: BusinessSummary = {
+        id: workspace.business_id,
+        business_name: workspace.request.business_name,
+        input_revision: workspace.input_revision,
+      };
+      return [
+        summary,
+        ...current.filter((item) => item.id !== workspace.business_id),
+      ];
+    });
+    setShowErrors(false);
+    setConfirmExample(false);
+    setWorkspaceError(null);
+    setNotice(message);
+  }
+
+  async function handleAuth(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setAuthBusy(true);
+    setAuthError(null);
+    try {
+      const user = await submitCredentials(authMode, email, password);
+      const items = await fetchBusinesses();
+      setSession(user);
+      setBusinesses(items);
+      setPassword("");
+      setNotice(`Signed in as ${user.email}.`);
+    } catch (error) {
+      setAuthError(
+        error instanceof Error ? error.message : "Authentication failed.",
+      );
+    } finally {
+      setAuthBusy(false);
+    }
+  }
+
+  async function handleSignOut() {
+    setAuthBusy(true);
+    try {
+      await signOut();
+    } finally {
+      setSession(null);
+      setBusinesses([]);
+      setActiveWorkspace(null);
+      setWorkspaceError(null);
+      setAuthError(null);
+      setAuthBusy(false);
+      setForm(createEmptyForm());
+      setNotice("Signed out. Workspace entries cleared from this browser.");
+    }
+  }
+
+  async function handleSelectWorkspace(businessId: string) {
+    setWorkspaceBusy(true);
+    setWorkspaceError(null);
+    try {
+      const workspace = await fetchWorkspace(businessId);
+      applyWorkspace(
+        workspace,
+        `Loaded saved workspace "${workspace.request.business_name}".`,
+      );
+    } catch (error) {
+      setWorkspaceError(
+        error instanceof Error ? error.message : "Could not load workspace.",
+      );
+    } finally {
+      setWorkspaceBusy(false);
+    }
+  }
+
+  async function handleSaveWorkspace() {
+    const nextErrors = validateForm(form);
+    if (hasErrors(nextErrors)) {
+      setShowErrors(true);
+      setNotice(null);
+      const target = firstErrorId(nextErrors, form);
+      if (target) {
+        requestAnimationFrame(() => document.getElementById(target)?.focus());
+      }
+      return;
+    }
+    setWorkspaceBusy(true);
+    setWorkspaceError(null);
+    try {
+      const workspace = await saveWorkspace(form);
+      applyWorkspace(
+        workspace,
+        `Saved workspace "${workspace.request.business_name}".`,
+      );
+    } catch (error) {
+      setWorkspaceError(
+        error instanceof Error ? error.message : "Could not save workspace.",
+      );
+    } finally {
+      setWorkspaceBusy(false);
+    }
+  }
+
+  function startNewWorkspace() {
+    setForm(createEmptyForm());
+    setActiveWorkspace(null);
+    setShowErrors(false);
+    setConfirmExample(false);
+    setWorkspaceError(null);
+    setNotice("Started a new unsaved workspace draft.");
+  }
 
   function updateBusinessName(businessName: string) {
     setForm((current) => ({ ...current, businessName }));
@@ -183,6 +350,7 @@ function ManualEntry() {
 
   function applyExample() {
     setForm(createExampleForm());
+    setActiveWorkspace(null);
     setShowErrors(false);
     setConfirmExample(false);
     setNotice(
@@ -232,12 +400,33 @@ function ManualEntry() {
     );
   }
 
-  function analyseFigures() {
+  async function analyseFigures() {
     const nextErrors = validateForm(form);
     setShowErrors(true);
     if (hasErrors(nextErrors)) {
       const target = firstErrorId(nextErrors, form);
       if (target) requestAnimationFrame(() => document.getElementById(target)?.focus());
+      return;
+    }
+    if (session) {
+      setWorkspaceBusy(true);
+      setWorkspaceError(null);
+      try {
+        const targetId = savedClean
+          ? activeWorkspace.id
+          : (await saveWorkspace(form)).business_id;
+        const workspace = await analyseWorkspace(targetId);
+        applyWorkspace(
+          workspace,
+          `Saved and analysed workspace "${workspace.request.business_name}".`,
+        );
+      } catch (error) {
+        setWorkspaceError(
+          error instanceof Error ? error.message : "Could not analyse workspace.",
+        );
+      } finally {
+        setWorkspaceBusy(false);
+      }
       return;
     }
     analysis.run();
@@ -254,20 +443,190 @@ function ManualEntry() {
             </h1>
             <p className="max-w-2xl text-sm text-muted-foreground">
               Enter one to three completed financial years, check the figures,
-              and confirm them. This is a local prototype for fictional data.
+              and confirm them. Sign in to save and reload owner-protected
+              workspaces.
             </p>
           </div>
-          <Badge variant="outline">Not saved</Badge>
+          <Badge variant={savedClean ? "secondary" : "outline"}>
+            {savedClean
+              ? `Saved · Rev ${activeWorkspace.revision}`
+              : session
+                ? "Unsaved draft"
+                : "Not saved"}
+          </Badge>
         </header>
 
-        <Alert role="status">
-          <HugeiconsIcon icon={InformationCircleIcon} />
-          <AlertTitle>Prototype data is not saved</AlertTitle>
-          <AlertDescription className="col-start-2">
-            Reloading the page clears every entry. Use fictional data only.
-            Figures are confirmed manually and are not authenticated.
-          </AlertDescription>
-        </Alert>
+        <Card>
+          <CardHeader>
+            <CardTitle>
+              {session ? "Protected workspace" : "Account and saved workspaces"}
+            </CardTitle>
+            <CardDescription>
+              {session
+                ? `Signed in as ${session.email}. Workspaces and analysis runs are scoped to your account.`
+                : "Sign in or create a local account to save businesses and reload analyses across sessions."}
+            </CardDescription>
+            {session ? (
+              <CardAction>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={handleSignOut}
+                  disabled={authBusy || workspaceBusy}
+                >
+                  Sign out
+                </Button>
+              </CardAction>
+            ) : null}
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {session ? (
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-end gap-3">
+                  <div className="min-w-64 flex-1 space-y-1.5">
+                    <Label htmlFor="workspace-select">Saved businesses</Label>
+                    <Select<string>
+                      id="workspace-select"
+                      items={businesses.map((item) => ({
+                        value: item.id,
+                        label: `${item.business_name} (Rev ${item.input_revision})`,
+                      }))}
+                      value={activeWorkspace?.id ?? ""}
+                      onValueChange={(value) => {
+                        if (value) void handleSelectWorkspace(value);
+                      }}
+                    >
+                      <SelectTrigger className="w-full">
+                        <SelectValue
+                          placeholder={
+                            businesses.length === 0
+                              ? "No saved businesses yet"
+                              : "Select a saved business"
+                          }
+                        />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {businesses.map((item) => (
+                          <SelectItem key={item.id} value={item.id}>
+                            {item.business_name} (Rev {item.input_revision})
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={handleSaveWorkspace}
+                    disabled={workspaceBusy || savedClean}
+                  >
+                    {workspaceBusy
+                      ? "Saving…"
+                      : savedClean
+                        ? "Workspace saved"
+                        : "Save workspace"}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    onClick={startNewWorkspace}
+                    disabled={workspaceBusy}
+                  >
+                    New workspace
+                  </Button>
+                </div>
+                {workspaceError ? (
+                  <Alert variant="destructive">
+                    <HugeiconsIcon icon={Alert02Icon} />
+                    <AlertTitle>Workspace action failed</AlertTitle>
+                    <AlertDescription className="col-start-2">
+                      {workspaceError}
+                    </AlertDescription>
+                  </Alert>
+                ) : null}
+              </div>
+            ) : (
+              <form onSubmit={handleAuth} className="space-y-4">
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="auth-email">Email</Label>
+                    <Input
+                      id="auth-email"
+                      type="email"
+                      value={email}
+                      onChange={(event) => setEmail(event.target.value)}
+                      autoComplete="email"
+                      required
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="auth-password">Password</Label>
+                    <Input
+                      id="auth-password"
+                      type="password"
+                      value={password}
+                      onChange={(event) => setPassword(event.target.value)}
+                      autoComplete={
+                        authMode === "register"
+                          ? "new-password"
+                          : "current-password"
+                      }
+                      minLength={12}
+                      maxLength={128}
+                      required
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Use 12 to 128 characters.
+                    </p>
+                  </div>
+                </div>
+                {authError ? (
+                  <p role="alert" className="text-sm text-destructive">
+                    {authError}
+                  </p>
+                ) : null}
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button type="submit" size="sm" disabled={authBusy}>
+                    {authBusy
+                      ? "Submitting…"
+                      : authMode === "register"
+                        ? "Create account"
+                        : "Sign in"}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      setAuthMode((current) =>
+                        current === "login" ? "register" : "login",
+                      );
+                      setAuthError(null);
+                    }}
+                  >
+                    {authMode === "login"
+                      ? "Need an account? Create one"
+                      : "Already have an account? Sign in"}
+                  </Button>
+                </div>
+              </form>
+            )}
+          </CardContent>
+        </Card>
+
+        {!session ? (
+          <Alert role="status">
+            <HugeiconsIcon icon={InformationCircleIcon} />
+            <AlertTitle>Prototype data is not saved</AlertTitle>
+            <AlertDescription className="col-start-2">
+              Without signing in, reloading the page clears every entry. Use
+              fictional data until private-data protection is verified. Figures
+              are confirmed manually and are not authenticated.
+            </AlertDescription>
+          </Alert>
+        ) : null}
+
 
         {showErrors && hasErrors(errors) ? (
           <Alert variant="destructive">
@@ -463,22 +822,58 @@ function ManualEntry() {
           </Card>
         </form>
 
-        <section className="space-y-4" aria-label="Run analysis" aria-busy={analysis.loading}>
-          <Button type="button" onClick={analyseFigures} disabled={analysis.loading}>
-            {analysis.loading ? "Analysing…" : analysis.error ? "Retry analysis" : "Analyse figures"}
+        <section
+          className="space-y-4"
+          aria-label="Run analysis"
+          aria-busy={analysis.loading || workspaceBusy}
+        >
+          <Button
+            type="button"
+            onClick={() => void analyseFigures()}
+            disabled={analysis.loading || workspaceBusy}
+          >
+            {analysis.loading || workspaceBusy
+              ? "Analysing…"
+              : analysis.error
+                ? "Retry analysis"
+                : "Analyse figures"}
           </Button>
-          <p className="text-sm text-muted-foreground">Unconfirmed or missing inputs remain visible as evidence gaps. Analysis does not confirm entries for you.</p>
-          <p role="status" aria-live="polite">
-            {analysis.loading ? "Calculating from the submitted figures…" : analysis.stale ? "Entries changed. Previous results are hidden; review and analyse again." : analysis.data ? "Analysis complete." : ""}
+          <p className="text-sm text-muted-foreground">
+            Unconfirmed or missing inputs remain visible as evidence gaps.
+            Analysis does not confirm entries for you.
           </p>
-          {analysis.error ? <Alert variant="destructive"><AlertTitle>Analysis could not complete</AlertTitle><AlertDescription>{analysis.error} Your entries are kept.</AlertDescription></Alert> : null}
+          <p role="status" aria-live="polite">
+            {analysis.loading || workspaceBusy
+              ? "Calculating from the submitted figures…"
+              : analysis.stale ||
+                  (activeWorkspace !== null &&
+                    activeWorkspace.form !== form &&
+                    activeWorkspace.analysis !== null)
+                ? "Entries changed. Previous results are hidden; review and analyse again."
+                : displayedAnalysis
+                  ? "Analysis complete."
+                  : ""}
+          </p>
+          {analysis.error ? (
+            <Alert variant="destructive">
+              <AlertTitle>Analysis could not complete</AlertTitle>
+              <AlertDescription>
+                {analysis.error} Your entries are kept.
+              </AlertDescription>
+            </Alert>
+          ) : null}
         </section>
-        {analysis.data ? <AnalysisResults data={analysis.data} businessName={form.businessName} /> : null}
+        {displayedAnalysis ? (
+          <AnalysisResults
+            data={displayedAnalysis}
+            businessName={form.businessName}
+          />
+        ) : null}
 
         <footer className="space-y-1 pb-4 text-xs text-muted-foreground">
           <p>
-            Phase 1 prototype · Financial rules are provisional pending
-            finance-reviewer validation.
+            Phase 2 protected workspaces · Financial rules are provisional
+            pending finance-reviewer validation.
           </p>
           <p>
             Cash generation is not assessed; no cash-flow statement is entered
