@@ -77,7 +77,7 @@ The baseline is the supplied **CredLens-Milestone-One-Report.pdf**, the Group 36
 ### Planned backend from the proposal
 
 - Python + FastAPI + Pydantic, as one application with separate document, financial-analysis, retrieval/RAG, and reporting modules; avoid microservices.
-- PostgreSQL + pgvector, SQLAlchemy, and migrations for structured records and authorised passage retrieval.
+- PostgreSQL + pgvector, SQLAlchemy, and migrations for structured records and authorised passage retrieval. The user selected Neon-hosted PostgreSQL on 2026-11-12. P2-00 establishes backend connectivity only; application persistence/migrations remain P2-01 and authentication P2-02. Keep database credentials backend-only and use fictional data until access controls exist.
 - pdfplumber for page-level digital-PDF extraction.
 - Python `Decimal` and deterministic rules for financial arithmetic, comparability checks, and dependencies.
 - Sentence Transformers for local embeddings; Ollama for a local instruction model. MiniLM is a candidate, not a finalized model choice.

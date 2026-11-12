@@ -15,7 +15,7 @@ python3 -m venv .venv
 
 On Windows, use `py -3.14` (or `py -3.12`) and `.venv\Scripts\python.exe` instead. Python must have pip/venv support; Linux distributions may package these separately. The financial-year check uses `Asia/Kolkata` timezone data; `tzdata` is pinned in `requirements.txt` for platforms such as Windows that lack a system IANA zoneinfo database. No global package installation is needed.
 
-OpenAPI documentation is at `http://127.0.0.1:8000/docs`. The pinned `requirements.txt` includes runtime and test dependencies for local development. Do not commit `.venv` or caches. No environment variables or database are required. The frontend uses a Vite development proxy to this local backend; see the root [workflow instructions](../README.md#run-the-phase-1-workflow-locally).
+OpenAPI documentation is at `http://127.0.0.1:8000/docs`. The pinned `requirements.txt` includes runtime and test dependencies for local development. Do not commit `.venv` or caches. The calculation routes still work without a database; the optional database health route requires `DATABASE_URL`. The frontend uses a Vite development proxy to this local backend; see the root [workflow instructions](../README.md#run-the-phase-1-workflow-locally).
 
 Run tests from `backend/`:
 
@@ -90,3 +90,42 @@ Checked live PyPI release metadata on 2026-11-07 (and `tzdata` on 2026-11-12), t
 The releases are not yanked and their runtime constraints admit the tested Python 3.14.8 and Python 3.12.2 environments. The installed Starlette TestClient explicitly prefers HTTPX2 and deprecates HTTPX; use HTTPX2 for these tests. Transitive versions are frozen in `requirements.txt`; `pip check` validates installed dependency constraints. Check release metadata again before future additions/upgrades and test the resolved set before changing pins.
 
 Implementation references: [Pydantic validators](https://docs.pydantic.dev/latest/concepts/validators/), [Pydantic serialization](https://docs.pydantic.dev/latest/concepts/serialization/), and [FastAPI validation errors](https://fastapi.tiangolo.com/tutorial/handling-errors/).
+
+
+## Neon database connection (P2-00)
+
+The selected Neon project is `solitary-bonus-79407058`, organization `org-aged-wildflower-20828140`, branch `production`. Only Postgres is enabled in the generated root `neon.ts`; Neon Auth, Functions, and other services are not enabled. `neon deploy` applies that service configuration; it does not deploy the React or FastAPI applications.
+
+To connect a teammate's checkout, install the Neon CLI (tested `neon@9.4.0`, Node 26.13.1), sign in, then run from the root:
+
+```bash
+neon init -y --org-id org-aged-wildflower-20828140 --project-id solitary-bonus-79407058 --branch production --services postgres
+neon deploy
+```
+
+The CLI writes connection credentials into ignored `.env.local` (or `.env` if present). `.neon` is also ignored. Use `.env.example` only as a template; never commit real URLs. The backend loads the root `.env`, if present, otherwise `.env.local`; existing process environment variables take priority. Restart the backend after pulling a different branch's variables.
+
+`app/database.py` uses SQLAlchemy with Psycopg 3 over TLS. The application uses pooled `DATABASE_URL` with `NullPool` locally to avoid a second idle pool. Connection attempts have a 10-second timeout, prepared statement caching is disabled for pooling compatibility, and SQL parameters are hidden. Keep `DATABASE_URL_UNPOOLED` for migrations in P2-01. These are server variables, never `VITE_` variables or browser connections. See [Neon's connection guide](https://neon.com/docs/connect/choose-connection) and [SQLAlchemy's Psycopg dialect](https://docs.sqlalchemy.org/en/21/dialects/postgresql.html#module-sqlalchemy.dialects.postgresql.psycopg).
+
+Start FastAPI and Vite using the existing commands, then check `GET /api/health/database` through Vite's `/api` proxy. Success is `{"status":"ok","database":"connected"}`; missing/invalid credentials or connection failures return sanitized HTTP 503. `/api/health` remains a database-independent liveness check. Financial analysis remains request-scoped and unsaved; connecting the database does not implement business persistence or authentication.
+
+For opt-in live verification from `backend/`:
+
+```bash
+RUN_NEON_TESTS=1 .venv/bin/python -m pytest -q
+```
+
+PowerShell: set `$env:RUN_NEON_TESTS = '1'` and use `.venv\Scripts\python.exe`. The live test writes/reads a fictional decimal in a temporary table inside one transaction, rolls it back, and checks the health API. It creates no permanent application tables. Default tests skip the live check and mock connection configuration/failures.
+
+New dependencies were checked against the official registries on 2026-11-12 and the resolved versions were tested on Python 3.14.8 / Node 26.13.1:
+
+| Package | Verified stable / pinned | Runtime | Registry |
+| --- | --- | --- | --- |
+| SQLAlchemy | 2.1.8 | Python >=3.11 | [PyPI](https://pypi.org/pypi/SQLAlchemy/json) |
+| psycopg + psycopg-binary | 3.3.9 | Python >=3.10 | [PyPI](https://pypi.org/pypi/psycopg/json) |
+| python-dotenv | 1.2.4 | Python >=3.10 | [PyPI](https://pypi.org/pypi/python-dotenv/json) |
+| neon (global CLI) | 9.4.0 | Node >=20.19.0 | [npm](https://www.npmjs.com/package/neon) |
+| @neon/config | 1.14.0 | Node >=20.19.0 | [npm](https://www.npmjs.com/package/@neon/config) |
+| @neon/env | 2.1.3 | Node >=20.19.0 | [npm](https://www.npmjs.com/package/@neon/env) |
+
+The CLI installed Neon plugins/skills at user scope for detected agents and configured their Neon MCP access. Those global installations are not repository content; backend connectivity uses ordinary environment variables and Psycopg and does not require an AI plugin. Bun remains the project package manager and `bun.lock` remains the only JavaScript lockfile.

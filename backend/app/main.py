@@ -1,7 +1,10 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from sqlalchemy.exc import SQLAlchemyError
+
+from app.database import check_database
 from app.analysis import analyse
 from app.schemas import AnalysisRequest, AnalysisResponse
 
@@ -37,3 +40,12 @@ def validate_figures(payload: AnalysisRequest) -> AnalysisRequest:
 @app.post("/api/analysis", response_model=AnalysisResponse)
 def analyse_figures(payload: AnalysisRequest) -> AnalysisResponse:
     return analyse(payload)
+
+
+@app.get("/api/health/database")
+def database_health() -> dict[str, str]:
+    try:
+        check_database()
+    except (RuntimeError, SQLAlchemyError):
+        raise HTTPException(status_code=503, detail="Database unavailable") from None
+    return {"status": "ok", "database": "connected"}

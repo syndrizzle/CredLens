@@ -27,3 +27,9 @@ __pycache__/
 *.njsproj
 *.sln
 *.sw?
+
+# Service credentials
+.env
+.env.*
+!.env.example
+.neon
