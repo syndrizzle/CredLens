@@ -1,6 +1,6 @@
 # CredLens backend
 
-P1-02 provides the local FastAPI application and validated schemas; P1-03 adds the deterministic calculation engine and `/api/analysis`. Use fictional data only: no persistence or authentication exists in this phase.
+The backend provides FastAPI validation and deterministic financial analysis. P2-01 adds PostgreSQL persistence and Alembic migrations for internal backend callers. Authentication and public save/load routes remain P2-02; use fictional data only.
 
 ## Setup and run
 
@@ -70,7 +70,7 @@ The [fictional request fixture](tests/fixtures/aster_components.json) matches th
 - Each indicator has `state`, `value`, `inputs`, `reasons`, and `next_step`. States use the four exact labels in the financial contract.
 - A supported result requires a finite decimal value; other states require null value and at least one reason. A reason contains a stable `code`, plain-language `message`, and affected `fields`.
 - Each input reference identifies year, field, unit, original figure/review/revision, and `normalized_inr`. Origin remains manual in Phase 1.
-- JSON serializes Decimal result values and normalized amounts as ordinary decimal strings, never floating-point numbers or scientific notation. Working capital is INR, growth/margin are percentages, and other indicators are ratios. The engine uses an isolated Decimal context with precision 34 and no intermediate display rounding. Two-decimal display formatting remains part of the future results UI.
+- JSON serializes Decimal result values and normalized amounts as ordinary decimal strings, never floating-point numbers or scientific notation. Working capital is INR, growth/margin are percentages, and other indicators are ratios. The engine uses an isolated Decimal context with precision 34 and no intermediate display rounding. The frontend results UI formats values to two decimal places.
 
 The engine applies state precedence independently to each indicator: Needs review, Not assessed, Not meaningful, Supported. It retains all relevant reasons and only calculates supported results. Reason codes are `missing_input`, `unreviewed`, `negative_input`, `missing_prior_year`, `comparability_unconfirmed`, `invalid_denominator`, `balance_mismatch`, and `component_exceeds_total`. Next steps identify needed corrections/evidence or suggest investigation without lending thresholds or inferred causes. Arithmetic tests do not replace finance-reviewer validation.
 
@@ -129,3 +129,37 @@ New dependencies were checked against the official registries on 2026-11-12 and 
 | @neon/env | 2.1.3 | Node >=20.19.0 | [npm](https://www.npmjs.com/package/@neon/env) |
 
 The CLI installed Neon plugins/skills at user scope for detected agents and configured their Neon MCP access. Those global installations are not repository content; backend connectivity uses ordinary environment variables and Psycopg and does not require an AI plugin. Bun remains the project package manager and `bun.lock` remains the only JavaScript lockfile.
+
+
+## Persistence and migrations (P2-01)
+
+See [the persistence contract](../docs/PERSISTENCE_PLAN.md). `app/models.py` defines five tables: owners, businesses, periods, figures, and analysis_runs. Financial amounts use PostgreSQL NUMERIC; raw strings, missing values, units/multipliers, review state, and revisions are preserved. Analysis runs store the input revision, rule version, input snapshot, full findings/evidence, and timestamp in JSONB with decimal strings. P2-04 adds corrections and supersession.
+
+Run migrations from `backend/` using the **direct** URL in `DATABASE_URL_UNPOOLED`:
+
+```bash
+.venv/bin/python -m alembic upgrade head
+.venv/bin/python -m alembic current
+.venv/bin/python -m alembic check
+```
+
+Environment variables take precedence over the root env file. To test a migration, obtain a disposable branch's direct URL securely and set both `DATABASE_URL_UNPOOLED` and `PERSISTENCE_TEST_URL` to that branch. Never print or commit these URLs. Run:
+
+```bash
+.venv/bin/python -m alembic upgrade head
+.venv/bin/python -m pytest tests/test_persistence.py -q
+```
+
+The persistence tests commit fictional records to verify reload across connections, then remove only their own generated owner/business records. They skip unless `PERSISTENCE_TEST_URL` is set, and expect the database to be migrated already. Test `alembic downgrade base` then `upgrade head` only on a disposable branch: downgrade destroys these tables and their data. Default application startup never migrates automatically.
+
+To load the unreviewed fictional Aster Components fixture into the database selected by `DATABASE_URL`:
+
+```bash
+.venv/bin/python -m app.seed
+```
+
+This is idempotent for the fixed demonstration owner and company name. It creates an internal owner ID, not a login account; do not associate that owner with real users. It does not confirm figures or replace existing data. This seed was exercised only on the disposable branch; production received empty tables.
+
+`app/persistence.py` exposes `save_business`, `load_business`, `save_analysis`, and `load_analysis` for backend callers. Use `with get_engine().begin() as connection:` for writes so a complete business or analysis is committed atomically. Reads and analysis operations require an owner ID and enforce it in database queries. P2-02 must derive that ID from a verified server session. No public saved-record routes or browser saving exist yet; the current UI remains explicitly unsaved. FastAPI-managed accounts were selected by the user for P2-02.
+
+Dependency verification (2026-11-12): [Alembic 1.20.1](https://pypi.org/pypi/alembic/json), Python >=3.10 and SQLAlchemy >=2.0, is compatible with installed SQLAlchemy 2.1.8/Python 3.14.8. Resolved transitive Mako 1.4.3 and MarkupSafe 3.0.4 are pinned alongside it. Migration setup follows the [official Alembic tutorial](https://alembic.sqlalchemy.org/en/latest/tutorial.html). Existing dependencies were not upgraded.

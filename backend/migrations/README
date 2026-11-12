@@ -1,0 +1,8 @@
+CredLens migrations use DATABASE_URL_UNPOOLED from the process environment or the
+root .env/.env.local. Never put credentials in alembic.ini.
+
+From backend/: .venv/bin/python -m alembic upgrade head
+Check metadata: .venv/bin/python -m alembic check
+Generate changes: .venv/bin/python -m alembic revision --autogenerate -m 'description'
+Review every generated migration. Test upgrade/downgrade on a disposable Neon
+branch first; downgrade drops data and is not a routine production rollback.

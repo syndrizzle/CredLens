@@ -10,12 +10,13 @@ from sqlalchemy.exc import ArgumentError
 
 
 @lru_cache
-def get_engine() -> Engine:
+def get_engine(*, direct: bool = False) -> Engine:
     root = Path(__file__).resolve().parents[2]
     load_dotenv(root / (".env" if (root / ".env").exists() else ".env.local"), override=False)
-    raw = os.environ.get("DATABASE_URL")
+    variable = "DATABASE_URL_UNPOOLED" if direct else "DATABASE_URL"
+    raw = os.environ.get(variable)
     if not raw:
-        raise RuntimeError("DATABASE_URL is not configured")
+        raise RuntimeError(f"{variable} is not configured")
     try:
         url = make_url(raw)
         if url.get_backend_name() not in {"postgres", "postgresql"}:
