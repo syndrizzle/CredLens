@@ -3,6 +3,7 @@ from decimal import Context, Decimal, localcontext, ROUND_HALF_UP
 from app.schemas import (
     AnalysisRequest, AnalysisResponse, BalanceCheck, FinancialField, FinancialPeriod,
     FinancialValue, Indicator, IndicatorResult, InputEvidence, PeriodAnalysis, Reason, EvidenceState,
+    ActionInput, ActionTarget, PreparationAction,
 )
 
 
@@ -137,6 +138,47 @@ def indicator_result(indicator: Indicator, period: FinancialPeriod,
                            inputs=inputs, reasons=reasons, next_step=next_step)
 
 
+def preparation_actions(periods: list[PeriodAnalysis]) -> list[PreparationAction]:
+    grouped = {}
+    for period in periods:
+        findings = [("balance_check", period.balance_check)] + [
+            (finding.indicator, finding) for finding in period.indicators
+        ]
+        for indicator, finding in findings:
+            reasons = finding.reasons or ([None] if indicator != "balance_check" else [])
+            for reason in reasons:
+                code = reason.code if reason else "supported_finding"
+                if reason is None:
+                    category = "investigate"
+                    message = finding.next_step
+                    inputs = finding.inputs
+                else:
+                    category = ("review" if code in REVIEW_CODES else
+                                "missing" if code in {"missing_input", "missing_prior_year"} else "interpretation")
+                    message = reason.message
+                    inputs = [item for item in finding.inputs if item.field in reason.fields]
+                    if code in {"missing_input", "unreviewed", "negative_input"}:
+                        # Growth contains revenue from two years; match the reason to its original input.
+                        inputs = [item for item in inputs if reason in input_reasons([item])]
+                    elif code == "invalid_denominator":
+                        year = period.year_start - 1 if indicator == "revenue_growth" else period.year_start
+                        inputs = [item for item in inputs if item.year_start == year]
+                references = sorted({(item.year_start, item.field) for item in inputs})
+                if code == "missing_prior_year":
+                    references = [(period.year_start - 1, "revenue")]
+                key = (category, code, message, tuple(references))
+                if key not in grouped:
+                    grouped[key] = PreparationAction(
+                        category=category, code=code, message=message,
+                        inputs=[ActionInput(year_start=year, field=field) for year, field in references],
+                        targets=[ActionTarget(year_start=period.year_start, indicator=indicator)],
+                    )
+                else:
+                    grouped[key].targets.append(ActionTarget(year_start=period.year_start, indicator=indicator))
+    priority = {"review": 0, "missing": 1, "interpretation": 2, "investigate": 3}
+    return sorted(grouped.values(), key=lambda action: priority[action.category])
+
+
 def analyse(request: AnalysisRequest) -> AnalysisResponse:
     # Use a fresh context so callers cannot change financial precision or rounding.
     with localcontext(Context(prec=34, rounding=ROUND_HALF_UP)):
@@ -149,4 +191,5 @@ def analyse(request: AnalysisRequest) -> AnalysisResponse:
                 indicators=[indicator_result(key, period, periods.get(year - 1), balance)
                             for key in DEPENDENCIES],
             ))
-        return AnalysisResponse(periods=results)
+        return AnalysisResponse(periods=results, action_version="preparation-actions-v1",
+                                actions=preparation_actions(results))

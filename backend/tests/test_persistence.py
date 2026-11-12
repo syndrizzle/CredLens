@@ -11,7 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from app.analysis import analyse
 from app.database import get_engine
 from app.models import owners, businesses, periods, figures, analysis_runs
-from app.persistence import save_business, load_business, save_analysis, load_analysis
+from app.persistence import save_business, load_business, save_analysis, load_analysis, load_workspace
 from app.schemas import AnalysisRequest
 
 pytestmark = pytest.mark.skipif(not os.getenv("PERSISTENCE_TEST_URL"), reason="Requires migrated disposable PostgreSQL database")
@@ -132,3 +132,57 @@ def test_empty_period_round_trip(db, request_data):
     with engine.connect() as connection:
         assert load_business(connection, owner, business).periods[0].values == {}
         assert all(f.state == "Not assessed" for f in load_analysis(connection, owner, run).periods[0].indicators)
+
+
+@pytest.mark.parametrize("variant", ["missing_interest", "unreviewed", "balance", "component", "mixed_units", "gap", "comparison"])
+def test_saved_dependency_cases_and_actions_survive_reload(db, request_data, variant):
+    engine, owner = db
+    current = request_data.periods[1]
+    if variant == "missing_interest":
+        del current.values["interest_expense"]
+    elif variant == "unreviewed":
+        current.values["current_assets"].reviewed = False
+    elif variant == "balance":
+        current.values["total_assets"].raw = "13000000"
+    elif variant == "component":
+        current.values["current_assets"].raw = "13000000"
+    elif variant == "mixed_units":
+        current.unit = "lakhs"
+        for figure in current.values.values():
+            figure.raw = str(figure.amount / Decimal("100000"))
+    elif variant == "gap":
+        request_data.periods[0].year_start = 2022
+    elif variant == "comparison":
+        current.comparable_to_prior = False
+    expected = analyse(request_data)
+    with engine.begin() as connection:
+        business = save_business(connection, owner, request_data)
+        run = save_analysis(connection, owner, business)
+    engine.dispose()
+    with engine.connect() as connection:
+        actual = load_analysis(connection, owner, run)
+        assert actual == expected
+        assert actual.action_version == "preparation-actions-v1"
+        assert load_workspace(connection, owner, business).latest_analysis == expected
+        stored = connection.execute(select(analysis_runs.c.results).where(analysis_runs.c.id == run)).scalar_one()
+        assert stored["actions"] == expected.model_dump(mode="json")["actions"]
+        affected = {"missing_interest": {"interest_coverage"}, "unreviewed": {"working_capital", "current_ratio"},
+                    "balance": {"working_capital", "current_ratio", "debt_to_equity"},
+                    "component": {"working_capital", "current_ratio", "debt_to_equity"},
+                    "mixed_units": set(), "gap": {"revenue_growth"}, "comparison": {"revenue_growth"}}[variant]
+        assert {finding.indicator for finding in actual.periods[1].indicators if finding.state != "Supported"} == affected
+        with pytest.raises(LookupError):
+            load_workspace(connection, uuid4(), business)
+
+
+def test_legacy_saved_run_remains_readable_without_inventing_actions(db, request_data):
+    engine, owner = db
+    with engine.begin() as connection:
+        business = save_business(connection, owner, request_data)
+        run = save_analysis(connection, owner, business)
+        legacy = analyse(request_data).model_dump(mode="json", exclude={"actions", "action_version"})
+        connection.execute(analysis_runs.update().where(analysis_runs.c.id == run).values(results=legacy))
+    with engine.connect() as connection:
+        actual = load_workspace(connection, owner, business).latest_analysis
+        assert actual.action_version is None and actual.actions == []
+        assert actual.periods == analyse(request_data).periods

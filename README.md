@@ -40,6 +40,16 @@ Open the URL Vite prints. Its development proxy forwards `/api` to the local bac
 
 Run `bun test` (requires the configured `backend/.venv`, as integration tests invoke Python), `bun run lint`, and `bun run build`. Full backend tests: `cd backend && .venv/bin/python -m pytest -q`. The Vite proxy is for development; production hosting/routing remains future scope.
 
+## Workspace UI regression checks
+
+With a locally installed Chromium-compatible browser, run from the repository root:
+
+```bash
+bun tests/run-workspace-ui.ts /path/to/chromium-or-chrome
+```
+
+Pass the browser executable path (quote it if it contains spaces). The runner bundles the real React UI with Bun, opens it in an isolated headless browser profile, and mocks API responses; no running backend or database is needed. It checks failed logout, draft discard/keep confirmation, and disabled editing/competing actions during delayed save/load/analysis. Temporary files and the browser profile are removed after the run. `bun test` runs the separate model/API tests.
+
 ## Frontend template
 
 This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.

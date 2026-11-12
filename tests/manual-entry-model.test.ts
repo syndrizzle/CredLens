@@ -211,6 +211,15 @@ describe("validation", () => {
       }),
     ).toBe(true);
   });
+
+  test("year-only and unit-only drafts need replacement confirmation", () => {
+    const form = createEmptyForm();
+    form.periods[0]!.yearStart -= 1;
+    expect(hasEntries(form)).toBe(true);
+    form.periods[0]!.yearStart += 1;
+    form.periods[0]!.unit = "lakhs";
+    expect(hasEntries(form)).toBe(true);
+  });
 });
 
 describe("fictional example", () => {

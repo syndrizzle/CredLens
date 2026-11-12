@@ -27,8 +27,20 @@ export type Finding = {
   indicator: Indicator; state: EvidenceState; value: string | null;
   inputs: InputEvidence[]; reasons: Reason[]; next_step: string;
 };
+export const ACTION_CATEGORIES = {
+  review: "Resolve and review inputs",
+  missing: "Supply missing evidence",
+  interpretation: "Check interpretation limits",
+  investigate: "Investigate supported findings",
+} as const;
+export type PreparationAction = {
+  category: keyof typeof ACTION_CATEGORIES; code: string; message: string;
+  inputs: { year_start: number; field: FinancialFieldKey }[];
+  targets: { year_start: number; indicator: Indicator | "balance_check" }[];
+};
 export type AnalysisResponse = {
   rule_version: "financial-rules-v1"; limitations: string[];
+  action_version?: "preparation-actions-v1" | null; actions?: PreparationAction[];
   periods: { year_start: number; indicators: Finding[]; balance_check: {
     state: EvidenceState; difference_inr: string | null; tolerance_inr: string;
     inputs: InputEvidence[]; reasons: Reason[];
@@ -82,7 +94,7 @@ export async function fetchAnalysis(form: FormDraft, signal: AbortSignal): Promi
 }
 
 export async function fetchSession(): Promise<SessionUser | null> {
-  const response = await fetch("/api/auth/session", { credentials: "same-origin" });
+  const response = await fetch("/api/auth/session", { credentials: "same-origin", signal: AbortSignal.timeout(30000) });
   if (response.status === 401) return null;
   if (!response.ok) throw new Error("Account service is unavailable. Check that the backend and database are running.");
   return response.json() as Promise<SessionUser>;
@@ -90,7 +102,7 @@ export async function fetchSession(): Promise<SessionUser | null> {
 
 export async function submitCredentials(mode: "login" | "register", email: string, password: string): Promise<SessionUser> {
   const response = await fetch(`/api/auth/${mode}`, {
-    method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" },
+    method: "POST", credentials: "same-origin", signal: AbortSignal.timeout(30000), headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email, password }),
   });
   if (response.status === 401) throw new Error("Invalid email or password.");
@@ -101,11 +113,12 @@ export async function submitCredentials(mode: "login" | "register", email: strin
 }
 
 export async function signOut(): Promise<void> {
-  await fetch("/api/auth/logout", { method: "POST", credentials: "same-origin" });
+  const response = await fetch("/api/auth/logout", { method: "POST", credentials: "same-origin", signal: AbortSignal.timeout(30000) });
+  if (!response.ok) throw new Error("Sign out could not be confirmed. Your session may still be active. Please retry.");
 }
 
 export async function fetchBusinesses(): Promise<BusinessSummary[]> {
-  const response = await fetch("/api/businesses", { credentials: "same-origin" });
+  const response = await fetch("/api/businesses", { credentials: "same-origin", signal: AbortSignal.timeout(30000) });
   if (response.status === 401) throw new Error("Your session expired. Sign in again.");
   if (!response.ok) throw new Error("Could not load saved workspaces.");
   return response.json() as Promise<BusinessSummary[]>;
@@ -113,20 +126,20 @@ export async function fetchBusinesses(): Promise<BusinessSummary[]> {
 
 export async function saveWorkspace(form: FormDraft): Promise<WorkspaceResponse> {
   const response = await fetch("/api/businesses", {
-    method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" },
+    method: "POST", credentials: "same-origin", signal: AbortSignal.timeout(30000), headers: { "Content-Type": "application/json" },
     body: JSON.stringify(analysisRequest(form)),
   });
   return parseWorkspace(response);
 }
 
 export async function fetchWorkspace(businessId: string): Promise<WorkspaceResponse> {
-  const response = await fetch(`/api/businesses/${encodeURIComponent(businessId)}`, { credentials: "same-origin" });
+  const response = await fetch(`/api/businesses/${encodeURIComponent(businessId)}`, { credentials: "same-origin", signal: AbortSignal.timeout(30000) });
   return parseWorkspace(response);
 }
 
 export async function analyseWorkspace(businessId: string): Promise<WorkspaceResponse> {
   const response = await fetch(`/api/businesses/${encodeURIComponent(businessId)}/analysis`, {
-    method: "POST", credentials: "same-origin",
+    method: "POST", credentials: "same-origin", signal: AbortSignal.timeout(30000),
   });
   return parseWorkspace(response);
 }
@@ -171,6 +184,14 @@ function validWorkspace(value: unknown): value is WorkspaceResponse {
 function validResponse(value: unknown, form: FormDraft): value is AnalysisResponse {
   if (!record(value) || value.rule_version !== "financial-rules-v1" || !Array.isArray(value.limitations) ||
       !value.limitations.every(item => typeof item === "string") || !Array.isArray(value.periods) || value.periods.length !== form.periods.length) return false;
+  if (value.action_version == null) {
+    if (value.actions !== undefined && (!Array.isArray(value.actions) || value.actions.length !== 0)) return false;
+  } else if (value.action_version !== "preparation-actions-v1" || !Array.isArray(value.actions) || value.actions.length === 0 ||
+      !value.actions.every(action => record(action) && typeof action.category === "string" && Object.hasOwn(ACTION_CATEGORIES, action.category) &&
+        typeof action.code === "string" && action.code.length > 0 && typeof action.message === "string" && action.message.length > 0 &&
+        Array.isArray(action.inputs) && action.inputs.length > 0 && action.inputs.every(input => record(input) && Number.isInteger(input.year_start) && field(input.field)) &&
+        Array.isArray(action.targets) && action.targets.length > 0 && action.targets.every(target => record(target) && form.periods.some(period => period.yearStart === target.year_start) &&
+          (target.indicator === "balance_check" || (typeof target.indicator === "string" && Object.hasOwn(INDICATORS, target.indicator)))))) return false;
   const years = new Set();
   return value.periods.every(period => {
     if (!record(period) || years.has(period.year_start) || !form.periods.some(input => input.yearStart === period.year_start)) return false;

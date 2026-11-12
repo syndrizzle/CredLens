@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 from app.analysis import analyse
 from app.main import app
-from app.schemas import AnalysisRequest
+from app.schemas import AnalysisRequest, AnalysisResponse
 
 
 @pytest.fixture
@@ -64,6 +64,13 @@ def test_dependency_isolation(payload, field, affected, problem, state):
         if key in affected:
             assert result.value is None
             assert field in {f for reason in result.reasons for f in reason.fields}
+    response = analyse(AnalysisRequest.model_validate(payload))
+    code = "missing_input" if problem == "missing" else "unreviewed"
+    actions = [action for action in response.actions if action.code == code
+               and [(item.year_start, item.field) for item in action.inputs] == [(2024, field)]]
+    assert len(actions) == 1
+    expected = affected | ({"balance_check"} if field == "total_equity" else set())
+    assert {(target.year_start, target.indicator) for target in actions[0].targets} == {(2024, key) for key in expected}
 
 
 @pytest.mark.parametrize("field,key", [("revenue", "net_profit_margin"), ("interest_expense", "interest_coverage"), ("current_liabilities", "current_ratio")])
@@ -223,3 +230,93 @@ def test_api_serialization_validation_and_unreviewed_fixture(payload):
         rejected = client.post("/api/analysis", json=payload)
         assert rejected.status_code == 422
         assert "input" not in rejected.json()["detail"][0]
+
+
+def test_actions_order_grouping_and_exact_cross_year_references(payload):
+    prior, current = payload["periods"]
+    del prior["values"]["revenue"]
+    current["values"]["ebit"]["reviewed"] = False
+    del current["values"]["interest_expense"]
+    current["values"]["current_liabilities"]["raw"] = "0"
+    response = analyse(AnalysisRequest.model_validate(payload))
+    categories = [action.category for action in response.actions]
+    priority = {"review": 0, "missing": 1, "interpretation": 2, "investigate": 3}
+    assert categories == sorted(categories, key=priority.get)
+    assert set(categories) == set(priority)
+    missing_revenue = [action for action in response.actions if action.code == "missing_input"
+                       and [(item.year_start, item.field) for item in action.inputs] == [(2023, "revenue")]]
+    assert len(missing_revenue) == 1
+    assert {(target.year_start, target.indicator) for target in missing_revenue[0].targets} == {
+        (2023, "revenue_growth"), (2023, "net_profit_margin"), (2024, "revenue_growth"),
+    }
+    coverage = response.periods[1].indicators[-1]
+    assert coverage.state == "Needs review"
+    assert {action.code for action in response.actions if any(target.year_start == 2024
+            and target.indicator == "interest_coverage" for target in action.targets)} == {"unreviewed", "missing_input"}
+    payload["periods"].reverse()
+    assert analyse(AnalysisRequest.model_validate(payload)) == response
+
+
+@pytest.mark.parametrize("conflict", ["balance", "component"])
+def test_conflict_action_groups_only_affected_findings(payload, conflict):
+    values = payload["periods"][1]["values"]
+    if conflict == "balance":
+        values["total_assets"]["raw"] = "13000000"
+    else:
+        values["current_assets"]["raw"] = "13000000"
+    response = analyse(AnalysisRequest.model_validate(payload))
+    actions = [action for action in response.actions if action.code in {"balance_mismatch", "component_exceeds_total"}]
+    assert len(actions) == 1 and actions[0].category == "review"
+    assert {target.indicator for target in actions[0].targets} == {
+        "balance_check", "working_capital", "current_ratio", "debt_to_equity",
+    }
+    assert all(item.year_start == 2024 for item in actions[0].inputs)
+    assert all(finding.state == "Supported" for finding in response.periods[1].indicators
+               if finding.indicator in {"revenue_growth", "net_profit_margin", "interest_coverage"})
+
+
+def test_comparability_and_missing_prior_year_actions(payload):
+    payload["periods"][1]["comparable_to_prior"] = False
+    response = analyse(AnalysisRequest.model_validate(payload))
+    action = next(action for action in response.actions if action.code == "comparability_unconfirmed")
+    assert [(item.year_start, item.field) for item in action.inputs] == [(2023, "revenue"), (2024, "revenue")]
+    assert [(target.year_start, target.indicator) for target in action.targets] == [(2024, "revenue_growth")]
+    payload["periods"][0]["year_start"] = 2022
+    response = analyse(AnalysisRequest.model_validate(payload))
+    action = next(action for action in response.actions if action.code == "missing_prior_year"
+                  and action.targets[0].year_start == 2024)
+    assert [(item.year_start, item.field) for item in action.inputs] == [(2023, "revenue")]
+    assert [target.indicator for target in action.targets] == ["revenue_growth"]
+    assert all(item.state == "Supported" for item in response.periods[1].indicators[1:])
+
+
+def test_invalid_denominator_action_points_to_prior_revenue_only(payload):
+    payload["periods"][0]["values"]["revenue"]["raw"] = "0"
+    response = analyse(AnalysisRequest.model_validate(payload))
+    action = next(action for action in response.actions if action.code == "invalid_denominator"
+                  and any(target.indicator == "revenue_growth" for target in action.targets))
+    assert [(item.year_start, item.field) for item in action.inputs] == [(2023, "revenue")]
+    assert {(target.year_start, target.indicator) for target in action.targets} == {
+        (2023, "net_profit_margin"), (2024, "revenue_growth"),
+    }
+
+
+def test_action_version_legacy_snapshots_and_json_round_trip(payload):
+    response = analyse(AnalysisRequest.model_validate(payload))
+    assert response.action_version == "preparation-actions-v1"
+    assert AnalysisResponse.model_validate_json(response.model_dump_json()) == response
+    legacy = response.model_dump(mode="json", exclude={"actions", "action_version"})
+    restored = AnalysisResponse.model_validate_json(json.dumps(legacy))
+    assert restored.action_version is None and restored.actions == []
+    assert restored.periods == response.periods
+    with pytest.raises(ValueError):
+        AnalysisResponse.model_validate({**response.model_dump(), "action_version": None})
+
+
+def test_unknown_units_and_duplicate_years_are_rejected_at_boundary(payload):
+    client = TestClient(app)
+    payload["periods"][1]["unit"] = "millions"
+    assert client.post("/api/analysis", json=payload).status_code == 422
+    payload["periods"][1]["unit"] = "rupees"
+    payload["periods"][1]["year_start"] = 2023
+    assert client.post("/api/analysis", json=payload).status_code == 422

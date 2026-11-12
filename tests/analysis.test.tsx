@@ -155,3 +155,60 @@ test("workspace and auth client handles round-trip, auth errors, and cross-owner
   const analysed = await analyseWorkspace(saved.business_id);
   expect(analysed.latest_run_id).toBe("22222222-2222-2222-2222-222222222222");
 });
+
+test("logout rejects server and network failures so callers cannot report success", async () => {
+  const { signOut } = await import("../src/features/analysis/api");
+  respond({ detail: "Database unavailable" }, 503);
+  await expect(signOut()).rejects.toThrow("session may still be active");
+  globalThis.fetch = (async () => { throw new TypeError("offline"); }) as typeof fetch;
+  await expect(signOut()).rejects.toThrow("offline");
+  respond({ status: "signed_out" });
+  await expect(signOut()).resolves.toBeUndefined();
+});
+
+test("preparation actions render in server order with links to the affected evidence", async () => {
+  const form = reviewed();
+  form.periods[1]!.figures.current_assets.reviewed = false;
+  form.periods[1]!.figures.interest_expense.raw = "";
+  form.periods[1]!.figures.interest_expense.reviewed = false;
+  const data = engine(form);
+  respond(data);
+  const result = await fetchAnalysis(form, new AbortController().signal);
+  const html = renderToStaticMarkup(<AnalysisResults data={result} businessName={form.businessName} />);
+  expect(html).toContain("Preparation actions");
+  expect(html).toContain("preparation-actions-v1");
+  expect(html.indexOf("Review current assets")).toBeLessThan(html.indexOf("Supply interest expense"));
+  expect(html).toContain("not a credit-risk ranking");
+  expect(html).toContain("wrongly labelled unit cannot be detected automatically");
+  for (const action of result.actions!) for (const target of action.targets) {
+    const id = `finding-${target.year_start}-${target.indicator}`;
+    expect(html).toContain(`href="#${id}"`);
+    expect(html).toContain(`id="${id}"`);
+  }
+  const currentAssets = result.actions!.filter(action => action.code === "unreviewed" && action.inputs.some(input => input.field === "current_assets"));
+  expect(currentAssets).toHaveLength(1);
+  expect(currentAssets[0]!.targets.map(target => target.indicator)).toEqual(["working_capital", "current_ratio"]);
+});
+
+test("legacy analysis remains readable and asks for re-analysis; malformed actions are rejected", async () => {
+  const form = reviewed();
+  const data = engine(form);
+  const { actions, action_version: _actionVersion, ...legacy } = data;
+  respond(legacy);
+  const result = await fetchAnalysis(form, new AbortController().signal);
+  const html = renderToStaticMarkup(<AnalysisResults data={result} businessName={form.businessName} />);
+  expect(html).toContain("predates the preparation action list");
+  expect(html).toContain("Analyse the saved workspace again");
+  expect(html).toContain("20.00%");
+  for (const malformed of [
+    { ...data, actions: [] },
+    { ...data, action_version: "unknown" },
+    { ...data, action_version: null },
+    { ...data, actions: [{ ...actions![0], category: "credit_score" }] },
+    { ...data, actions: [{ ...actions![0], inputs: [{ year_start: 2023, field: "unknown" }] }] },
+    { ...data, actions: [{ ...actions![0], targets: [{ year_start: 9999, indicator: "current_ratio" }] }] },
+  ]) {
+    respond(malformed);
+    await expect(fetchAnalysis(form, new AbortController().signal)).rejects.toThrow("incomplete analysis");
+  }
+});

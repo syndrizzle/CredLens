@@ -134,14 +134,40 @@ class PeriodAnalysis(Model):
         return self
 
 
+class ActionInput(Model):
+    year_start: int
+    field: FinancialField
+
+
+class ActionTarget(Model):
+    year_start: int
+    indicator: Indicator | Literal["balance_check"]
+
+
+class PreparationAction(Model):
+    category: Literal["review", "missing", "interpretation", "investigate"]
+    code: str
+    message: str
+    inputs: list[ActionInput] = Field(min_length=1)
+    targets: list[ActionTarget] = Field(min_length=1)
+
+
 class AnalysisResponse(Model):
     rule_version: Literal["financial-rules-v1"] = "financial-rules-v1"
+    action_version: Literal["preparation-actions-v1"] | None = None
+    actions: list[PreparationAction] = Field(default_factory=list)
     limitations: list[str] = Field(default_factory=lambda: [
         "Financial rules are provisional pending finance-reviewer validation.",
         "Cash generation is not assessed; no cash-flow statement was analysed.",
         "Borrowings exclude leases and count current maturities once.",
     ])
     periods: list[PeriodAnalysis] = Field(min_length=1, max_length=3)
+
+    @model_validator(mode="after")
+    def versioned_actions(self) -> Self:
+        if bool(self.actions) != (self.action_version is not None):
+            raise ValueError("Preparation actions require their version; legacy responses have neither")
+        return self
 
 
 class CredentialsRequest(Model):

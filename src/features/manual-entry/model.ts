@@ -271,6 +271,8 @@ export function hasEntries(form: FormDraft): boolean {
     form.periods.length > 1 ||
     form.periods.some(
       (period) =>
+        period.yearStart !== latestCompletedYearStart() ||
+        period.unit !== "rupees" ||
         period.comparableToPrior ||
         Object.values(period.figures).some(
           (figure) => figure.raw.trim() !== "",

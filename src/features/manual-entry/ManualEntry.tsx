@@ -13,7 +13,7 @@ import {
   type WorkspaceResponse,
 } from "../analysis/api";
 import { useAnalysis } from "../analysis/use-analysis";
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   Add01Icon,
@@ -75,6 +75,7 @@ import {
 } from "./model";
 
 const EMPTY_ERRORS: FormErrors = { years: {}, figures: {} };
+type Replacement = { type: "load"; id: string } | { type: "new" } | { type: "signout" };
 
 function ManualEntry() {
   const [form, setForm] = useState<FormDraft>(createEmptyForm);
@@ -87,6 +88,7 @@ function ManualEntry() {
   const [password, setPassword] = useState("");
   const [authError, setAuthError] = useState<string | null>(null);
   const [authBusy, setAuthBusy] = useState(false);
+  const [checkingSession, setCheckingSession] = useState(true);
   const [businesses, setBusinesses] = useState<BusinessSummary[]>([]);
   const [activeWorkspace, setActiveWorkspace] = useState<{
     id: string;
@@ -96,6 +98,9 @@ function ManualEntry() {
   } | null>(null);
   const [workspaceBusy, setWorkspaceBusy] = useState(false);
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
+  const [replacement, setReplacement] = useState<Replacement | null>(null);
+  const actionPending = useRef(true);
+  const actionsDisabled = checkingSession || authBusy || workspaceBusy;
 
   const analysis = useAnalysis(form);
   const periods = sortedPeriods(form.periods);
@@ -119,13 +124,20 @@ function ManualEntry() {
           if (active) setBusinesses(items);
         });
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => {
+        if (active) {
+          actionPending.current = false;
+          setCheckingSession(false);
+        }
+      });
     return () => {
       active = false;
     };
   }, []);
 
   function applyWorkspace(workspace: WorkspaceResponse, message: string) {
+    setReplacement(null);
     const nextForm = formFromRequest(workspace.request);
     setForm(nextForm);
     setActiveWorkspace({
@@ -153,6 +165,8 @@ function ManualEntry() {
 
   async function handleAuth(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (actionPending.current) return;
+    actionPending.current = true;
     setAuthBusy(true);
     setAuthError(null);
     try {
@@ -167,27 +181,37 @@ function ManualEntry() {
         error instanceof Error ? error.message : "Authentication failed.",
       );
     } finally {
+      actionPending.current = false;
       setAuthBusy(false);
     }
   }
 
   async function handleSignOut() {
+    if (actionPending.current) return;
+    actionPending.current = true;
     setAuthBusy(true);
+    setWorkspaceError(null);
     try {
       await signOut();
-    } finally {
       setSession(null);
       setBusinesses([]);
       setActiveWorkspace(null);
       setWorkspaceError(null);
       setAuthError(null);
-      setAuthBusy(false);
       setForm(createEmptyForm());
+      setReplacement(null);
       setNotice("Signed out. Workspace entries cleared from this browser.");
+    } catch {
+      setWorkspaceError("Sign out could not be confirmed. Your session may still be active. Your entries are kept; please retry.");
+    } finally {
+      actionPending.current = false;
+      setAuthBusy(false);
     }
   }
 
   async function handleSelectWorkspace(businessId: string) {
+    if (actionPending.current) return;
+    actionPending.current = true;
     setWorkspaceBusy(true);
     setWorkspaceError(null);
     try {
@@ -201,11 +225,13 @@ function ManualEntry() {
         error instanceof Error ? error.message : "Could not load workspace.",
       );
     } finally {
+      actionPending.current = false;
       setWorkspaceBusy(false);
     }
   }
 
   async function handleSaveWorkspace() {
+    if (actionPending.current) return;
     const nextErrors = validateForm(form);
     if (hasErrors(nextErrors)) {
       setShowErrors(true);
@@ -216,6 +242,7 @@ function ManualEntry() {
       }
       return;
     }
+    actionPending.current = true;
     setWorkspaceBusy(true);
     setWorkspaceError(null);
     try {
@@ -229,17 +256,36 @@ function ManualEntry() {
         error instanceof Error ? error.message : "Could not save workspace.",
       );
     } finally {
+      actionPending.current = false;
       setWorkspaceBusy(false);
     }
   }
 
   function startNewWorkspace() {
+    setReplacement(null);
     setForm(createEmptyForm());
     setActiveWorkspace(null);
     setShowErrors(false);
     setConfirmExample(false);
     setWorkspaceError(null);
     setNotice("Started a new unsaved workspace draft.");
+  }
+
+  function requestReplacement(action: Replacement) {
+    if (actionPending.current) return;
+    if (!savedClean && (activeWorkspace !== null || hasEntries(form))) {
+      setReplacement(action);
+      return;
+    }
+    replaceDraft(action);
+  }
+
+  function replaceDraft(action: Replacement) {
+    if (actionPending.current) return;
+    setReplacement(null);
+    if (action.type === "load") void handleSelectWorkspace(action.id);
+    else if (action.type === "signout") void handleSignOut();
+    else startNewWorkspace();
   }
 
   function updateBusinessName(businessName: string) {
@@ -349,6 +395,7 @@ function ManualEntry() {
   }
 
   function applyExample() {
+    setReplacement(null);
     setForm(createExampleForm());
     setActiveWorkspace(null);
     setShowErrors(false);
@@ -401,6 +448,7 @@ function ManualEntry() {
   }
 
   async function analyseFigures() {
+    if (actionPending.current) return;
     const nextErrors = validateForm(form);
     setShowErrors(true);
     if (hasErrors(nextErrors)) {
@@ -409,6 +457,7 @@ function ManualEntry() {
       return;
     }
     if (session) {
+      actionPending.current = true;
       setWorkspaceBusy(true);
       setWorkspaceError(null);
       try {
@@ -425,6 +474,7 @@ function ManualEntry() {
           error instanceof Error ? error.message : "Could not analyse workspace.",
         );
       } finally {
+        actionPending.current = false;
         setWorkspaceBusy(false);
       }
       return;
@@ -434,7 +484,7 @@ function ManualEntry() {
 
   return (
     <main className="min-h-screen bg-muted/30">
-      <div className="mx-auto flex max-w-5xl flex-col gap-6 px-4 py-8 sm:px-6 lg:py-12">
+      <fieldset disabled={actionsDisabled} className="mx-auto flex min-w-0 max-w-5xl flex-col gap-6 px-4 py-8 sm:px-6 lg:py-12" aria-label="Financial health workspace">
         <header className="flex flex-wrap items-start justify-between gap-4">
           <div className="space-y-1">
             <p className="text-sm font-medium text-primary">CredLens</p>
@@ -472,7 +522,7 @@ function ManualEntry() {
                   type="button"
                   variant="outline"
                   size="sm"
-                  onClick={handleSignOut}
+                  onClick={() => requestReplacement({ type: "signout" })}
                   disabled={authBusy || workspaceBusy}
                 >
                   Sign out
@@ -481,12 +531,14 @@ function ManualEntry() {
             ) : null}
           </CardHeader>
           <CardContent className="space-y-4">
+            {checkingSession ? <p role="status" className="text-sm text-muted-foreground">Checking saved session…</p> : null}
             {session ? (
               <div className="space-y-3">
                 <div className="flex flex-wrap items-end gap-3">
                   <div className="min-w-64 flex-1 space-y-1.5">
                     <Label htmlFor="workspace-select">Saved businesses</Label>
                     <Select<string>
+                      disabled={actionsDisabled}
                       id="workspace-select"
                       items={businesses.map((item) => ({
                         value: item.id,
@@ -494,7 +546,7 @@ function ManualEntry() {
                       }))}
                       value={activeWorkspace?.id ?? ""}
                       onValueChange={(value) => {
-                        if (value) void handleSelectWorkspace(value);
+                        if (value) requestReplacement({ type: "load", id: value });
                       }}
                     >
                       <SelectTrigger className="w-full">
@@ -530,12 +582,22 @@ function ManualEntry() {
                   <Button
                     type="button"
                     variant="ghost"
-                    onClick={startNewWorkspace}
+                    onClick={() => requestReplacement({ type: "new" })}
                     disabled={workspaceBusy}
                   >
                     New workspace
                   </Button>
                 </div>
+                {replacement ? (
+                  <div role="group" aria-label="Discard unsaved entries?" className="rounded-lg border border-border bg-muted/50 p-3">
+                    <p className="text-sm font-medium">Discard unsaved entries?</p>
+                    <p className="mt-1 text-sm text-muted-foreground">Continuing will replace your current draft. Save it first if you want to keep it.</p>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <Button type="button" variant="destructive" size="sm" onClick={() => replaceDraft(replacement)}>Discard and continue</Button>
+                      <Button type="button" variant="outline" size="sm" onClick={() => setReplacement(null)}>Keep editing</Button>
+                    </div>
+                  </div>
+                ) : null}
                 {workspaceError ? (
                   <Alert variant="destructive">
                     <HugeiconsIcon icon={Alert02Icon} />
@@ -753,6 +815,7 @@ function ManualEntry() {
                 periods={form.periods}
                 errors={errors}
                 canRemove={form.periods.length > 1}
+                disabled={actionsDisabled}
                 onRemove={() => removePeriod(period.id)}
                 onYearChange={(yearStart) =>
                   updatePeriodYear(period.id, yearStart)
@@ -881,12 +944,13 @@ function ManualEntry() {
             maturities once.
           </p>
         </footer>
-      </div>
+      </fieldset>
     </main>
   );
 }
 
 type PeriodCardProps = {
+  disabled: boolean;
   period: PeriodDraft;
   periods: PeriodDraft[];
   errors: FormErrors;
@@ -899,6 +963,7 @@ type PeriodCardProps = {
 };
 
 function PeriodCard({
+  disabled,
   period,
   periods,
   errors,
@@ -945,6 +1010,7 @@ function PeriodCard({
           <div className="space-y-2">
             <Label htmlFor={`year-${period.id}`}>Financial year</Label>
             <Select<number>
+              disabled={disabled}
               id={`year-${period.id}`}
               items={YEAR_ITEMS}
               value={period.yearStart}
@@ -995,6 +1061,7 @@ function PeriodCard({
           <div className="space-y-2">
             <Label htmlFor={`unit-${period.id}`}>Amount unit</Label>
             <Select<Unit>
+              disabled={disabled}
               id={`unit-${period.id}`}
               items={UNIT_ITEMS}
               value={period.unit}
