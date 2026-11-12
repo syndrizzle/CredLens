@@ -15,7 +15,7 @@ python3 -m venv .venv
 
 On Windows, use `py -3.14` and `.venv\Scripts\python.exe` instead. Python must have pip/venv support; Linux distributions may package these separately. The financial-year check uses `Asia/Kolkata` timezone data; on systems without it, install the Python `tzdata` package in the environment. No global package installation is needed.
 
-OpenAPI documentation is at `http://127.0.0.1:8000/docs`. The pinned `requirements.txt` includes runtime and test dependencies for local development. Do not commit `.venv` or caches. No environment variables, database, or frontend changes are needed for this task.
+OpenAPI documentation is at `http://127.0.0.1:8000/docs`. The pinned `requirements.txt` includes runtime and test dependencies for local development. Do not commit `.venv` or caches. No environment variables or database are required. The frontend uses a Vite development proxy to this local backend; see the root [workflow instructions](../README.md#run-the-phase-1-workflow-locally).
 
 Run tests from `backend/`:
 

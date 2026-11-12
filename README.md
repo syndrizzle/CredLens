@@ -20,6 +20,26 @@ Keep shared rules in `AGENTS.md` and adapters small. The Ponytail rules are pinn
 
 These instructions guide model behaviour; they do not enforce checks or guarantee correctness. Optional Ponytail skills, slash commands, lifecycle hooks, and mode switching are not installed.
 
+## Run the Phase 1 workflow locally
+
+Set up the Python environment using [backend/README.md](backend/README.md), then run these in separate terminals from the repository root:
+
+```bash
+# Terminal 1
+cd backend
+.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+```bash
+# Terminal 2
+bun install --frozen-lockfile
+bun run dev
+```
+
+Open the URL Vite prints. Its development proxy forwards `/api` to the local backend on port 8000. Load the labelled fictional example, review/confirm figures, then select **Analyse figures**. Unconfirmed/missing inputs show their own evidence states; edits hide outdated results until re-analysis. Entries and results are unsaved.
+
+Run `bun test` (requires the configured `backend/.venv`, as integration tests invoke Python), `bun run lint`, and `bun run build`. Full backend tests: `cd backend && .venv/bin/python -m pytest -q`. The Vite proxy is for development; production hosting/routing remains future scope.
+
 ## Frontend template
 
 This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.

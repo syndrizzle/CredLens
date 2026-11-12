@@ -17,6 +17,7 @@ export type Unit = "rupees" | "thousands" | "lakhs" | "crores";
 export type FigureDraft = {
   raw: string;
   reviewed: boolean;
+  revision?: number;
 };
 
 export type PeriodDraft = {

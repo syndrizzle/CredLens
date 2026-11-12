@@ -2,7 +2,7 @@
 
 Task: P1-01. Status: **CONFIRMED for Phase 1 implementation**. Prepared and confirmed: 2026-11-07.
 
-This is the user-confirmed contract for the first usable workflow in [PROJECT_SPEC.md](PROJECT_SPEC.md). It turns the milestone proposal's six formulas into explicit inputs, review behaviour, and test expectations. P1-02 implements request/result schemas and boundary validation; P1-03 implements the calculation engine and API. Forms and results UI remain pending. Financial definitions remain provisional pending a finance reviewer; user confirmation is a product decision, not professional validation.
+This is the user-confirmed contract for the first usable workflow in [PROJECT_SPEC.md](PROJECT_SPEC.md). It turns the milestone proposal's six formulas into explicit inputs, review behaviour, and test expectations. P1-02 implements request/result schemas and boundary validation; P1-03 implements the calculation engine and API. P1-04 implements entry/review forms and P1-05 connects them to analysis and evidence results; the full browser walkthrough remains P1-06. Financial definitions remain provisional pending a finance reviewer; user confirmation is a product decision, not professional validation.
 
 ## First workflow
 

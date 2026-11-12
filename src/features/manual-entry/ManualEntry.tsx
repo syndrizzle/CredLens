@@ -1,3 +1,5 @@
+import { AnalysisResults } from "../analysis/AnalysisResults";
+import { useAnalysis } from "../analysis/use-analysis";
 import { useState, type FormEvent } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
@@ -66,6 +68,7 @@ function ManualEntry() {
   const [confirmExample, setConfirmExample] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
 
+  const analysis = useAnalysis(form);
   const periods = sortedPeriods(form.periods);
   const errors = showErrors ? validateForm(form) : EMPTY_ERRORS;
   const counts = countReview(form.periods);
@@ -90,7 +93,7 @@ function ManualEntry() {
               ...period,
               figures: {
                 ...period.figures,
-                [field]: { raw, reviewed: false },
+                [field]: { raw, reviewed: false, revision: (period.figures[field].revision ?? 1) + 1 },
               },
             }
           : period,
@@ -227,6 +230,17 @@ function ManualEntry() {
         counts.present === 1 ? "figure" : "figures"
       }. Editing a figure marks it unreviewed.`,
     );
+  }
+
+  function analyseFigures() {
+    const nextErrors = validateForm(form);
+    setShowErrors(true);
+    if (hasErrors(nextErrors)) {
+      const target = firstErrorId(nextErrors, form);
+      if (target) requestAnimationFrame(() => document.getElementById(target)?.focus());
+      return;
+    }
+    analysis.run();
   }
 
   return (
@@ -448,6 +462,18 @@ function ManualEntry() {
             </CardContent>
           </Card>
         </form>
+
+        <section className="space-y-4" aria-label="Run analysis" aria-busy={analysis.loading}>
+          <Button type="button" onClick={analyseFigures} disabled={analysis.loading}>
+            {analysis.loading ? "Analysing…" : analysis.error ? "Retry analysis" : "Analyse figures"}
+          </Button>
+          <p className="text-sm text-muted-foreground">Unconfirmed or missing inputs remain visible as evidence gaps. Analysis does not confirm entries for you.</p>
+          <p role="status" aria-live="polite">
+            {analysis.loading ? "Calculating from the submitted figures…" : analysis.stale ? "Entries changed. Previous results are hidden; review and analyse again." : analysis.data ? "Analysis complete." : ""}
+          </p>
+          {analysis.error ? <Alert variant="destructive"><AlertTitle>Analysis could not complete</AlertTitle><AlertDescription>{analysis.error} Your entries are kept.</AlertDescription></Alert> : null}
+        </section>
+        {analysis.data ? <AnalysisResults data={analysis.data} businessName={form.businessName} /> : null}
 
         <footer className="space-y-1 pb-4 text-xs text-muted-foreground">
           <p>
