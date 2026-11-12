@@ -12,11 +12,12 @@ function reviewed() {
   return form;
 }
 function engine(form: FormDraft): AnalysisResponse {
-  const process = Bun.spawnSync(["backend/.venv/bin/python", "-c", "import json,sys; from app.schemas import AnalysisRequest; from app.analysis import analyse; print(analyse(AnalysisRequest.model_validate(json.load(sys.stdin))).model_dump_json())"], {
+  const python = process.platform === "win32" ? "backend/.venv/Scripts/python.exe" : "backend/.venv/bin/python";
+  const result = Bun.spawnSync([python, "-c", "import json,sys; from app.schemas import AnalysisRequest; from app.analysis import analyse; print(analyse(AnalysisRequest.model_validate(json.load(sys.stdin))).model_dump_json())"], {
     env: { ...Bun.env, PYTHONPATH: "backend" }, stdin: new TextEncoder().encode(JSON.stringify(analysisRequest(form))),
   });
-  expect(process.exitCode).toBe(0);
-  return JSON.parse(process.stdout.toString());
+  expect(result.exitCode).toBe(0);
+  return JSON.parse(result.stdout.toString());
 }
 function respond(body: unknown, status = 200) {
   globalThis.fetch = (async () => Response.json(body, { status })) as typeof fetch;
@@ -58,6 +59,34 @@ test("missing interest blocks coverage only; restoring it refreshes results", ()
   expect(findings.find(item => item.indicator === "interest_coverage")!.state).toBe("Not assessed");
   form.periods[1]!.figures.interest_expense = { raw: "400000", reviewed: true, revision: 2 };
   expect(displayDecimal(engine(form).periods[1]!.indicators.at(-1)!.value!)).toBe("3.00");
+});
+
+test("controlled variants render one-year growth, zero denominators, and non-positive equity explanations", () => {
+  const form = reviewed();
+  form.periods.shift();
+  const current = form.periods[0]!;
+  current.comparableToPrior = false;
+  current.figures.revenue.raw = "0";
+  current.figures.interest_expense.raw = "0";
+  current.figures.current_liabilities.raw = "0";
+  current.figures.total_equity.raw = "0";
+  current.figures.total_liabilities.raw = "12000000.00";
+  const output = engine(form);
+  const byKey = Object.fromEntries(output.periods[0]!.indicators.map(item => [item.indicator, item]));
+  expect(byKey.revenue_growth!.state).toBe("Not assessed");
+  expect(byKey.net_profit_margin!.state).toBe("Not meaningful");
+  expect(byKey.working_capital!.state).toBe("Supported");
+  expect(displayDecimal(byKey.working_capital!.value!)).toBe("5000000.00");
+  expect(byKey.current_ratio!.state).toBe("Not meaningful");
+  expect(byKey.debt_to_equity!.state).toBe("Not meaningful");
+  expect(byKey.interest_coverage!.state).toBe("Not meaningful");
+  const html = renderToStaticMarkup(<AnalysisResults data={output} businessName={form.businessName} />);
+  expect(html).toContain("Supply the immediately preceding financial year starting 2023.");
+  expect(html).toContain("Revenue must be positive for this ratio to be meaningful.");
+  expect(html).toContain("Current liabilities must be positive for this ratio to be meaningful.");
+  expect(html).toContain("Total equity must be positive for this ratio to be meaningful.");
+  expect(html).toContain("Interest expense must be positive for this ratio to be meaningful.");
+  expect(html).not.toContain("Infinity");
 });
 
 test("errors retain the draft and a subsequent retry succeeds", async () => {

@@ -13,7 +13,7 @@ python3 -m venv .venv
 .venv/bin/python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-On Windows, use `py -3.14` and `.venv\Scripts\python.exe` instead. Python must have pip/venv support; Linux distributions may package these separately. The financial-year check uses `Asia/Kolkata` timezone data; on systems without it, install the Python `tzdata` package in the environment. No global package installation is needed.
+On Windows, use `py -3.14` (or `py -3.12`) and `.venv\Scripts\python.exe` instead. Python must have pip/venv support; Linux distributions may package these separately. The financial-year check uses `Asia/Kolkata` timezone data; `tzdata` is pinned in `requirements.txt` for platforms such as Windows that lack a system IANA zoneinfo database. No global package installation is needed.
 
 OpenAPI documentation is at `http://127.0.0.1:8000/docs`. The pinned `requirements.txt` includes runtime and test dependencies for local development. Do not commit `.venv` or caches. No environment variables or database are required. The frontend uses a Vite development proxy to this local backend; see the root [workflow instructions](../README.md#run-the-phase-1-workflow-locally).
 
@@ -76,7 +76,7 @@ The engine applies state precedence independently to each indicator: Needs revie
 
 ## Dependency verification
 
-Checked live PyPI release metadata on 2026-11-07, then compared it with the installed versions. These are registry-resolved versions, not values selected from memory:
+Checked live PyPI release metadata on 2026-11-07 (and `tzdata` on 2026-11-12), then compared it with the installed versions. These are registry-resolved versions, not values selected from memory:
 
 | Direct dependency | Latest stable / installed | Official registry source | Python requirement |
 | --- | --- | --- | --- |
@@ -85,7 +85,8 @@ Checked live PyPI release metadata on 2026-11-07, then compared it with the inst
 | Uvicorn | 0.54.0 | [PyPI](https://pypi.org/pypi/uvicorn/json) | >=3.10 |
 | Pytest | 9.2.0 | [PyPI](https://pypi.org/pypi/pytest/json) | >=3.10 |
 | HTTPX2 (TestClient) | 2.16.0 | [PyPI](https://pypi.org/pypi/httpx2/json) | >=3.11 |
+| tzdata | 2026.6 | [PyPI](https://pypi.org/pypi/tzdata/json) | >=2 |
 
-The releases are not yanked and their runtime constraints admit the tested Python 3.14.8. The installed Starlette TestClient explicitly prefers HTTPX2 and deprecates HTTPX; use HTTPX2 for these tests. Transitive versions are frozen in `requirements.txt`; `pip check` validates installed dependency constraints. Check release metadata again before future additions/upgrades and test the resolved set before changing pins.
+The releases are not yanked and their runtime constraints admit the tested Python 3.14.8 and Python 3.12.2 environments. The installed Starlette TestClient explicitly prefers HTTPX2 and deprecates HTTPX; use HTTPX2 for these tests. Transitive versions are frozen in `requirements.txt`; `pip check` validates installed dependency constraints. Check release metadata again before future additions/upgrades and test the resolved set before changing pins.
 
 Implementation references: [Pydantic validators](https://docs.pydantic.dev/latest/concepts/validators/), [Pydantic serialization](https://docs.pydantic.dev/latest/concepts/serialization/), and [FastAPI validation errors](https://fastapi.tiangolo.com/tutorial/handling-errors/).
