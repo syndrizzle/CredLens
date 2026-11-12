@@ -1,7 +1,7 @@
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { FINANCIAL_FIELDS, financialYearLabel, unitLabel } from "../manual-entry/model";
-import { ACTION_CATEGORIES, INDICATORS, displayDecimal, type AnalysisResponse, type InputEvidence } from "./api";
+import { ACTION_CATEGORIES, INDICATORS, displayDecimal, type AnalysisResponse, type AnalysisRunSummary, type InputEvidence } from "./api";
 
 function Evidence({ inputs }: { inputs: InputEvidence[] }) {
   return <dl className="space-y-3 text-sm">{inputs.map(input => <div key={`${input.year_start}-${input.field}`} className="space-y-1 border-t pt-3">
@@ -11,10 +11,14 @@ function Evidence({ inputs }: { inputs: InputEvidence[] }) {
   </div>)}</dl>;
 }
 
-export function AnalysisResults({ data, businessName }: { data: AnalysisResponse; businessName: string }) {
+export function AnalysisResults({ data, businessName, inputRevision, runs }: {
+  data: AnalysisResponse; businessName: string; inputRevision?: number; runs?: AnalysisRunSummary[];
+}) {
+  const superseded = runs?.filter(run => run.superseded) ?? [];
   return <section className="space-y-6" aria-labelledby="analysis-heading">
     <div><h2 id="analysis-heading" className="font-heading text-2xl font-semibold">Analysis · {businessName}</h2>
-      <p className="text-sm text-muted-foreground">INR · Standalone · {data.rule_version} · Manually supplied figures</p></div>
+      <p className="text-sm text-muted-foreground">INR · Standalone · {data.rule_version} · Manually supplied figures{inputRevision !== undefined ? ` · Input revision ${inputRevision} (current)` : ""}</p>
+      {superseded.length > 0 ? <p className="text-xs text-muted-foreground">Supersedes {superseded.length} earlier analysis {superseded.length === 1 ? "run" : "runs"} ({superseded.map(run => `Rev ${run.input_revision}`).join(", ")} marked superseded).</p> : null}</div>
     <Card><CardHeader><CardTitle>Preparation actions</CardTitle>
       <CardDescription>Resolve and review inputs first, supply missing evidence, then investigate supported findings. This is workflow order, not a credit-risk ranking. Check units against your records; a wrongly labelled unit cannot be detected automatically.</CardDescription>
     </CardHeader><CardContent>

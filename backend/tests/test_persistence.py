@@ -10,8 +10,8 @@ from sqlalchemy.exc import IntegrityError
 
 from app.analysis import analyse
 from app.database import get_engine
-from app.models import owners, businesses, periods, figures, analysis_runs
-from app.persistence import save_business, load_business, save_analysis, load_analysis, load_workspace
+from app.models import owners, businesses, periods, figures, revisions, analysis_runs
+from app.persistence import save_business, update_business, load_business, save_analysis, load_analysis, load_workspace
 from app.schemas import AnalysisRequest
 
 pytestmark = pytest.mark.skipif(not os.getenv("PERSISTENCE_TEST_URL"), reason="Requires migrated disposable PostgreSQL database")
@@ -186,3 +186,105 @@ def test_legacy_saved_run_remains_readable_without_inventing_actions(db, request
         actual = load_workspace(connection, owner, business).latest_analysis
         assert actual.action_version is None and actual.actions == []
         assert actual.periods == analyse(request_data).periods
+
+
+def test_corrections_persist_reviewer_revisions_invalidate_outputs_and_retain_superseded_history(db, request_data):
+    engine, owner = db
+    with engine.begin() as connection:
+        business = save_business(connection, owner, request_data)
+        run_1 = save_analysis(connection, owner, business)
+        ws_1 = load_workspace(connection, owner, business)
+        assert ws_1.input_revision == 1
+        assert ws_1.latest_run_id == run_1
+        assert ws_1.latest_analysis == analyse(request_data)
+        assert len(ws_1.runs) == 1
+        assert ws_1.runs[0].run_id == run_1 and ws_1.runs[0].input_revision == 1 and not ws_1.runs[0].superseded
+
+        # Correct FY 2024-25 interest_expense to 300000.00 (unreviewed) and save in place.
+        edited = request_data.model_copy(deep=True)
+        edited.periods[1].values["interest_expense"].raw = "300000.00"
+        edited.periods[1].values["interest_expense"].reviewed = False
+        rev_2 = update_business(connection, owner, business, edited, expected_revision=1)
+        assert rev_2 == 2
+        ws_2 = load_workspace(connection, owner, business)
+        assert ws_2.input_revision == 2
+        assert ws_2.latest_run_id is None
+        assert ws_2.latest_analysis is None
+        assert len(ws_2.runs) == 1
+        assert ws_2.runs[0].run_id == run_1 and ws_2.runs[0].input_revision == 1 and ws_2.runs[0].superseded
+
+        pid_2024 = connection.execute(
+            select(periods.c.id).where(periods.c.business_id == business, periods.c.year_start == 2024)
+        ).scalar_one()
+        fig_rows = {
+            row["field"]: row
+            for row in connection.execute(select(figures).where(figures.c.period_id == pid_2024)).mappings()
+        }
+        assert fig_rows["interest_expense"]["revision"] == 2
+        assert fig_rows["interest_expense"]["reviewed"] is False
+        assert fig_rows["interest_expense"]["reviewed_by"] is None
+        assert fig_rows["interest_expense"]["origin"] == "manual"
+        assert fig_rows["ebit"]["revision"] == 1
+        assert fig_rows["ebit"]["reviewed"] is True
+        assert fig_rows["ebit"]["reviewed_by"] == owner
+
+        # Confirm the corrected interest_expense without changing its raw amount, then re-analyse.
+        confirmed = ws_2.request.model_copy(deep=True)
+        confirmed.periods[1].values["interest_expense"].reviewed = True
+        rev_3 = update_business(connection, owner, business, confirmed, expected_revision=2)
+        assert rev_3 == 3
+        run_2 = save_analysis(connection, owner, business)
+        ws_3 = load_workspace(connection, owner, business)
+        assert ws_3.input_revision == 3
+        assert ws_3.latest_run_id == run_2
+        assert ws_3.latest_analysis is not None
+        coverage = next(item for item in ws_3.latest_analysis.periods[1].indicators if item.indicator == "interest_coverage")
+        assert coverage.state == "Supported" and coverage.value == Decimal("4")
+        by_field = {inp.field: inp for inp in coverage.inputs}
+        assert by_field["ebit"].figure.revision == 1
+        assert by_field["interest_expense"].figure.revision == 2
+        assert [ (r.run_id, r.input_revision, r.superseded) for r in ws_3.runs ] == [
+            (run_2, 3, False),
+            (run_1, 1, True),
+        ]
+
+        rev_history = connection.execute(
+            select(revisions).where(revisions.c.business_id == business).order_by(revisions.c.input_revision)
+        ).mappings().all()
+        assert [row["input_revision"] for row in rev_history] == [1, 2, 3]
+        assert all(row["actor_id"] == owner for row in rev_history)
+        assert rev_history[1]["inputs"]["periods"][1]["values"]["interest_expense"]["reviewed"] is False
+        assert rev_history[2]["inputs"]["periods"][1]["values"]["interest_expense"]["reviewed"] is True
+
+
+def test_optimistic_concurrency_omitted_field_readdition_and_reviewer_constraint(db, request_data):
+    engine, owner = db
+    with engine.begin() as connection:
+        business = save_business(connection, owner, request_data)
+        without_interest = request_data.model_copy(deep=True)
+        del without_interest.periods[1].values["interest_expense"]
+        assert update_business(connection, owner, business, without_interest, expected_revision=1) == 2
+
+        with pytest.raises(ValueError, match="updated in another session"):
+            update_business(connection, owner, business, request_data, expected_revision=1)
+        with pytest.raises(LookupError, match="Business not found"):
+            update_business(connection, uuid4(), business, request_data, expected_revision=1)
+
+        restored = without_interest.model_copy(deep=True)
+        restored.periods[1].values["interest_expense"] = request_data.periods[1].values["interest_expense"].model_copy()
+        assert update_business(connection, owner, business, restored, expected_revision=2) == 3
+        loaded = load_business(connection, owner, business)
+        assert loaded.periods[1].values["interest_expense"].revision == 2
+        pid = connection.execute(
+            select(periods.c.id).where(periods.c.business_id == business, periods.c.year_start == 2024)
+        ).scalar_one()
+
+    with pytest.raises(IntegrityError), engine.begin() as connection:
+        connection.execute(figures.insert().values(
+            period_id=pid, field="revenue", raw="100", normalized_inr=Decimal("100"),
+            origin="manual", reviewed=True, reviewed_by=None, revision=1,
+        ))
+    with pytest.raises(IntegrityError), engine.begin() as connection:
+        connection.execute(figures.update().where(
+            figures.c.period_id == pid, figures.c.field == "revenue"
+        ).values(reviewed=False, reviewed_by=owner))

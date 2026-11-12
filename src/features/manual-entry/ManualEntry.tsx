@@ -7,7 +7,9 @@ import {
   saveWorkspace,
   signOut,
   submitCredentials,
+  updateWorkspace,
   type AnalysisResponse,
+  type AnalysisRunSummary,
   type BusinessSummary,
   type SessionUser,
   type WorkspaceResponse,
@@ -95,6 +97,7 @@ function ManualEntry() {
     revision: number;
     form: FormDraft;
     analysis: AnalysisResponse | null;
+    runs: AnalysisRunSummary[];
   } | null>(null);
   const [workspaceBusy, setWorkspaceBusy] = useState(false);
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
@@ -145,6 +148,7 @@ function ManualEntry() {
       revision: workspace.input_revision,
       form: nextForm,
       analysis: workspace.latest_analysis,
+      runs: workspace.runs ?? [],
     });
     setBusinesses((current) => {
       const summary: BusinessSummary = {
@@ -246,7 +250,9 @@ function ManualEntry() {
     setWorkspaceBusy(true);
     setWorkspaceError(null);
     try {
-      const workspace = await saveWorkspace(form);
+      const workspace = activeWorkspace
+        ? await updateWorkspace(activeWorkspace.id, activeWorkspace.revision, form)
+        : await saveWorkspace(form);
       applyWorkspace(
         workspace,
         `Saved workspace "${workspace.request.business_name}".`,
@@ -461,9 +467,19 @@ function ManualEntry() {
       setWorkspaceBusy(true);
       setWorkspaceError(null);
       try {
-        const targetId = savedClean
-          ? activeWorkspace.id
-          : (await saveWorkspace(form)).business_id;
+        let targetId: string;
+        if (savedClean) {
+          targetId = activeWorkspace.id;
+        } else {
+          const saved = activeWorkspace
+            ? await updateWorkspace(activeWorkspace.id, activeWorkspace.revision, form)
+            : await saveWorkspace(form);
+          applyWorkspace(
+            saved,
+            `Saved workspace "${saved.request.business_name}".`,
+          );
+          targetId = saved.business_id;
+        }
         const workspace = await analyseWorkspace(targetId);
         applyWorkspace(
           workspace,
@@ -913,9 +929,13 @@ function ManualEntry() {
                     activeWorkspace.form !== form &&
                     activeWorkspace.analysis !== null)
                 ? "Entries changed. Previous results are hidden; review and analyse again."
-                : displayedAnalysis
-                  ? "Analysis complete."
-                  : ""}
+                : savedClean &&
+                    activeWorkspace.analysis === null &&
+                    activeWorkspace.runs.some((run) => run.superseded)
+                  ? `Saved revision ${activeWorkspace.revision} supersedes earlier analysis runs. Review and analyse again to refresh results.`
+                  : displayedAnalysis
+                    ? "Analysis complete."
+                    : ""}
           </p>
           {analysis.error ? (
             <Alert variant="destructive">
@@ -930,6 +950,8 @@ function ManualEntry() {
           <AnalysisResults
             data={displayedAnalysis}
             businessName={form.businessName}
+            inputRevision={savedClean ? activeWorkspace.revision : undefined}
+            runs={savedClean ? activeWorkspace.runs : undefined}
           />
         ) : null}
 

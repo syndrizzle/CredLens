@@ -109,11 +109,27 @@ async function run() {
   pending = deferred();
   analysisPending = deferred();
   await click(button("Analyse figures"));
-  check(name().matches(":disabled"), "Editor locked during create-and-analyse");
-  await act(async () => pending.resolve(Response.json(workspace("copy", "Edited after analysis"))));
+  check(name().matches(":disabled"), "Editor locked during update-and-analyse");
+  check(calls.includes("PUT /api/businesses/a"), "Editing saved workspace updates in place with PUT");
+  await act(async () => pending.resolve(Response.json({
+    ...workspace("a", "Edited after analysis"),
+    input_revision: 2,
+    runs: [{ run_id: "r1", input_revision: 1, rule_version: "financial-rules-v1", action_version: "preparation-actions-v1", superseded: true, created_at: "2026-11-12T10:00:00Z" }],
+  })));
   check(name().matches(":disabled"), "Editor stays locked between save and analysis responses");
-  await act(async () => analysisPending.resolve(Response.json(workspace("copy", "Edited after analysis"))));
-  check(name().value === "Edited after analysis", "Create-and-analyse keeps submitted entries");
+  await act(async () => analysisPending.resolve(Response.json({
+    ...workspace("a", "Edited after analysis"),
+    input_revision: 2,
+    runs: [{ run_id: "r1", input_revision: 1, rule_version: "financial-rules-v1", action_version: "preparation-actions-v1", superseded: true, created_at: "2026-11-12T10:00:00Z" }],
+  })));
+  check(name().value === "Edited after analysis", "Update-and-analyse keeps submitted entries");
+  check(text().includes("Saved revision 2 supersedes earlier analysis runs"), "Superseded status shown when saved revision has no current analysis");
+
+  await rename("Draft with revision conflict");
+  pending = deferred();
+  await click(button("Save workspace"));
+  await act(async () => pending.resolve(Response.json({ detail: "Workspace has been updated in another session; reload before saving" }, { status: 409 })));
+  check(name().value === "Draft with revision conflict" && text().includes("updated in another session") && !name().matches(":disabled"), "409 conflict preserves draft and warns user");
 
   await rename("Draft after save failure");
   pending = deferred();

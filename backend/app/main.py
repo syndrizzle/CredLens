@@ -9,8 +9,8 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.analysis import analyse
 from app.auth import SESSION_COOKIE, SESSION_MAX_AGE, authenticate_account, register_account, resolve_session, revoke_session
 from app.database import check_database, get_engine
-from app.persistence import list_businesses, load_analysis, load_workspace, save_analysis, save_business
-from app.schemas import AnalysisRequest, AnalysisResponse, BusinessSummary, CredentialsRequest, SessionResponse, WorkspaceResponse
+from app.persistence import list_businesses, load_analysis, load_workspace, save_analysis, save_business, update_business
+from app.schemas import AnalysisRequest, AnalysisResponse, BusinessSummary, CredentialsRequest, SessionResponse, UpdateBusinessRequest, WorkspaceResponse
 
 app = FastAPI(title="CredLens", version="0.1.0")
 
@@ -127,6 +127,19 @@ def create_business(payload: AnalysisRequest, request: Request) -> WorkspaceResp
         session = require_session(connection, request)
         business_id = save_business(connection, session.owner_id, payload)
         return load_workspace(connection, session.owner_id, business_id)
+
+
+@app.put("/api/businesses/{business_id}", response_model=WorkspaceResponse)
+def replace_business(business_id: UUID, payload: UpdateBusinessRequest, request: Request) -> WorkspaceResponse:
+    with db_transaction() as connection:
+        session = require_session(connection, request)
+        try:
+            update_business(connection, session.owner_id, business_id, payload, payload.expected_revision)
+            return load_workspace(connection, session.owner_id, business_id)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from None
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from None
 
 
 @app.get("/api/businesses/{business_id}", response_model=WorkspaceResponse)

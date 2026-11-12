@@ -34,9 +34,10 @@ Run tests from `backend/`:
 - `POST /api/auth/logout` deletes the server session and clears the session cookie.
 - `GET /api/auth/session` returns `{"owner_id","email"}` for a valid active session or HTTP 401.
 - `GET /api/businesses` lists the authenticated owner's saved businesses (`[{"id","business_name","input_revision"}]`).
-- `POST /api/businesses` atomically saves a validated `AnalysisRequest` under the session owner and returns the `WorkspaceResponse` (`business_id`, `input_revision`, `request`, `latest_run_id`, `latest_analysis`).
-- `GET /api/businesses/{business_id}` loads an owned workspace and its latest analysis run, or returns HTTP 404 (`{"detail":"Business not found"}`) for both unknown and other-owner IDs.
-- `POST /api/businesses/{business_id}/analysis` runs deterministic analysis on the saved business, persists the versioned `analysis_runs` snapshot, and returns the updated `WorkspaceResponse` (or HTTP 404).
+- `POST /api/businesses` atomically saves a validated `AnalysisRequest` under the session owner, records `input_revision = 1` in `revisions`, and returns the `WorkspaceResponse` (`business_id`, `input_revision`, `request`, `latest_run_id`, `latest_analysis`, `runs`).
+- `GET /api/businesses/{business_id}` loads an owned workspace, its current analysis run (`latest_run_id`/`latest_analysis` when `run.input_revision == business.input_revision`, otherwise `null`), and its full `runs` summary list (`run_id`, `input_revision`, `rule_version`, `created_at`, `superseded`), or returns HTTP 404 (`{"detail":"Business not found"}`) for both unknown and other-owner IDs.
+- `PUT /api/businesses/{business_id}` atomically updates an owned business in place when `expected_revision` matches the stored `input_revision`, increments `input_revision`, computes per-figure `revision` and `reviewed_by`, records an immutable `revisions` snapshot, marks earlier `analysis_runs` as `superseded` (`latest_run_id: null`, `latest_analysis: null`), and returns the updated `WorkspaceResponse` (or HTTP 409 on stale `expected_revision`, HTTP 404 for unknown/other-owner IDs).
+- `POST /api/businesses/{business_id}/analysis` runs deterministic analysis on the saved business, persists the versioned `analysis_runs` snapshot for the current `input_revision`, and returns the updated `WorkspaceResponse` (or HTTP 404).
 - `GET /api/analysis-runs/{run_id}` loads a saved `AnalysisResponse` if owned by the session user, or returns HTTP 404 (`{"detail":"Analysis not found"}`).
 - Invalid requests return HTTP 422 with `detail`, a list of `{loc, type, msg}` errors. `loc` identifies the field path. Submitted values (including passwords, emails, and financial figures) and validator context are omitted from errors. No financial payloads or credentials are logged by application code.
 
@@ -143,9 +144,9 @@ New dependencies were checked against the official registries on 2026-11-12 and 
 The CLI installed Neon plugins/skills at user scope for detected agents and configured their Neon MCP access. Those global installations are not repository content; backend connectivity uses ordinary environment variables and Psycopg and does not require an AI plugin. Bun remains the project package manager and `bun.lock` remains the only JavaScript lockfile.
 
 
-## Persistence, migrations, and authentication (P2-01 / P2-02)
+## Persistence, migrations, authentication, and revisions (P2-01 / P2-02 / P2-04)
 
-See [the persistence and authentication contract](../docs/PERSISTENCE_PLAN.md). `app/models.py` defines seven tables: `owners`, `accounts`, `sessions`, `businesses`, `periods`, `figures`, and `analysis_runs`. Financial amounts use PostgreSQL NUMERIC; raw strings, missing values, units/multipliers, review state, and revisions are preserved. Analysis runs store the input revision, rule version, input snapshot, full findings/evidence, and timestamp in JSONB with decimal strings. `accounts` and `sessions` store `scrypt` password hashes and SHA-256 session token digests using Python standard-library `hashlib` and `secrets` (no new dependencies). P2-04 adds corrections and supersession.
+See [the persistence, authentication, and revision contract](../docs/PERSISTENCE_PLAN.md). `app/models.py` defines eight tables: `owners`, `accounts`, `sessions`, `businesses`, `revisions`, `periods`, `figures`, and `analysis_runs`. Financial amounts use PostgreSQL NUMERIC; raw strings, missing values, units/multipliers, review state, `reviewed_by`, and server-computed revisions are preserved. `revisions` stores immutable per-revision input snapshots (`business_id`, `input_revision`, `actor_id`, `inputs` JSONB, `created_at`). Analysis runs store the input revision, rule version, input snapshot, full findings/evidence, and timestamp in JSONB with decimal strings; runs whose `input_revision < business.input_revision` are retained and exposed in `WorkspaceResponse.runs` with `superseded: true` while `latest_run_id` and `latest_analysis` become `null` until re-analysis. `accounts` and `sessions` store `scrypt` password hashes and SHA-256 session token digests using Python standard-library `hashlib` and `secrets` (no new dependencies).
 
 Run migrations from `backend/` using the **direct** URL in `DATABASE_URL_UNPOOLED`:
 
@@ -162,7 +163,7 @@ Environment variables take precedence over the root env file. To test migrations
 .venv/bin/python -m pytest tests/test_persistence.py tests/test_auth.py -q
 ```
 
-The persistence and authentication tests commit fictional records and temporary accounts to verify reload and owner isolation across connections, then remove only their own generated owner/account/session/business records. Live database cases skip unless `PERSISTENCE_TEST_URL` is set, and expect the database to be migrated already. Test `alembic downgrade` only on a disposable branch: downgrade drops tables and their data. Default application startup never migrates automatically.
+The persistence and authentication tests commit fictional records and temporary accounts to verify reload, revision history, optimistic concurrency (`409`), and owner isolation across connections, then remove only their own generated owner/account/session/business records. Live database cases skip unless `PERSISTENCE_TEST_URL` is set, and expect the database to be migrated already. Test `alembic downgrade` only on a disposable branch: downgrade drops tables and their data. Default application startup never migrates automatically.
 
 To load the unreviewed fictional Aster Components fixture into the database selected by `DATABASE_URL`:
 
@@ -172,6 +173,6 @@ To load the unreviewed fictional Aster Components fixture into the database sele
 
 This is idempotent for the fixed demonstration owner and company name. It creates an internal owner ID without an `accounts` row, not a login account; do not associate that owner with real users. It does not confirm figures or replace existing data.
 
-`app/persistence.py` exposes `save_business`, `load_business`, `save_analysis`, `load_analysis`, `list_businesses`, and `load_workspace` for backend callers, and `app/auth.py` exposes `hash_password`, `verify_password`, `register_account`, `authenticate_account`, `resolve_session`, and `revoke_session`. Every protected HTTP route in `app/main.py` derives `owner_id` from the verified `credlens_session` cookie inside a transaction.
+`app/persistence.py` exposes `save_business`, `update_business`, `load_business`, `save_analysis`, `load_analysis`, `list_businesses`, and `load_workspace` for backend callers, and `app/auth.py` exposes `hash_password`, `verify_password`, `register_account`, `authenticate_account`, `resolve_session`, and `revoke_session`. Every protected HTTP route in `app/main.py` derives `owner_id` from the verified `credlens_session` cookie inside a transaction.
 
 Dependency verification (2026-11-12): [Alembic 1.20.1](https://pypi.org/pypi/alembic/json), Python >=3.10 and SQLAlchemy >=2.0, is compatible with installed SQLAlchemy 2.1.8/Python 3.14.8 and 3.12.2. Resolved transitive Mako 1.4.3 and MarkupSafe 3.0.4 are pinned alongside it. Migration setup follows the [official Alembic tutorial](https://alembic.sqlalchemy.org/en/latest/tutorial.html). Existing dependencies were not upgraded.

@@ -212,3 +212,69 @@ test("legacy analysis remains readable and asks for re-analysis; malformed actio
     await expect(fetchAnalysis(form, new AbortController().signal)).rejects.toThrow("incomplete analysis");
   }
 });
+
+test("updateWorkspace sends expected_revision, handles 409 conflicts, validates run history, and renders supersession", async () => {
+  const { updateWorkspace } = await import("../src/features/analysis/api");
+  const form = reviewed();
+  form.periods[1]!.figures.interest_expense = { raw: "300000.00", reviewed: true, revision: 2 };
+  const payload = analysisRequest(form);
+  const analysis = engine(form);
+
+  let sentMethod = "";
+  let sentBody: Record<string, unknown> = {};
+  globalThis.fetch = (async (_url, init) => {
+    sentMethod = init?.method ?? "";
+    sentBody = JSON.parse(String(init?.body));
+    return Response.json({
+      business_id: "11111111-1111-1111-1111-111111111111",
+      input_revision: 2,
+      request: payload,
+      latest_run_id: null,
+      latest_analysis: null,
+      runs: [{
+        run_id: "22222222-2222-2222-2222-222222222222",
+        input_revision: 1,
+        rule_version: "financial-rules-v1",
+        action_version: "preparation-actions-v1",
+        superseded: true,
+        created_at: "2026-11-12T10:00:00Z",
+      }],
+    });
+  }) as typeof fetch;
+
+  const updated = await updateWorkspace("11111111-1111-1111-1111-111111111111", 1, form);
+  expect(sentMethod).toBe("PUT");
+  expect(sentBody.expected_revision).toBe(1);
+  expect(updated.input_revision).toBe(2);
+  expect(updated.latest_analysis).toBeNull();
+  expect(updated.runs?.[0]?.superseded).toBe(true);
+
+  respond({ detail: "Workspace has been updated in another session; reload before saving" }, 409);
+  await expect(updateWorkspace("11111111-1111-1111-1111-111111111111", 1, form)).rejects.toThrow("updated in another session");
+
+  respond({
+    business_id: "11111111-1111-1111-1111-111111111111",
+    input_revision: 2,
+    request: payload,
+    latest_run_id: null,
+    latest_analysis: null,
+    runs: [{ run_id: "", input_revision: 0, superseded: "yes" }],
+  });
+  await expect(updateWorkspace("11111111-1111-1111-1111-111111111111", 1, form)).rejects.toThrow("invalid workspace payload");
+
+  const html = renderToStaticMarkup(
+    <AnalysisResults
+      data={analysis}
+      businessName={form.businessName}
+      inputRevision={2}
+      runs={[
+        { run_id: "33333333-3333-3333-3333-333333333333", input_revision: 2, rule_version: "financial-rules-v1", action_version: "preparation-actions-v1", superseded: false, created_at: "2026-11-12T10:05:00Z" },
+        { run_id: "22222222-2222-2222-2222-222222222222", input_revision: 1, rule_version: "financial-rules-v1", action_version: "preparation-actions-v1", superseded: true, created_at: "2026-11-12T10:00:00Z" },
+      ]}
+    />,
+  );
+  expect(html).toContain("Input revision 2 (current)");
+  expect(html).toContain("Supersedes 1 earlier analysis run (Rev 1 marked superseded).");
+  expect(html).toContain("Revision 2");
+  expect(html).toContain("4.00x");
+});

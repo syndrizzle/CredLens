@@ -62,6 +62,31 @@ def test_protected_routes_return_503_when_database_unavailable(monkeypatch):
     assert client.get("/api/businesses").status_code == 503
 
 
+def test_update_business_route_enforces_schema_and_maps_conflict_and_not_found(monkeypatch):
+    raw_fixture = json.loads((Path(__file__).parent / "fixtures/aster_components.json").read_text())["request"]
+    client = TestClient(app)
+    bid = uuid4()
+    assert client.put(f"/api/businesses/{bid}", json=raw_fixture).status_code == 422
+    assert client.put(f"/api/businesses/{bid}", json={**raw_fixture, "expected_revision": 0}).status_code == 422
+    assert client.put(f"/api/businesses/{bid}", json={**raw_fixture, "expected_revision": 1, "owner_id": str(uuid4())}).status_code == 422
+
+    @contextmanager
+    def dummy_tx():
+        yield object()
+
+    monkeypatch.setattr(main_module, "db_transaction", dummy_tx)
+    monkeypatch.setattr(main_module, "require_session", lambda _conn, _req: main_module.SessionResponse(owner_id=uuid4(), email="owner@example.com"))
+    monkeypatch.setattr(main_module, "update_business", lambda *_args: (_ for _ in ()).throw(ValueError("Workspace has been updated in another session; reload before saving")))
+    conflict = client.put(f"/api/businesses/{bid}", json={**raw_fixture, "expected_revision": 1})
+    assert conflict.status_code == 409
+    assert conflict.json() == {"detail": "Workspace has been updated in another session; reload before saving"}
+
+    monkeypatch.setattr(main_module, "update_business", lambda *_args: (_ for _ in ()).throw(LookupError("Business not found")))
+    missing = client.put(f"/api/businesses/{bid}", json={**raw_fixture, "expected_revision": 1})
+    assert missing.status_code == 404
+    assert missing.json() == {"detail": "Business not found"}
+
+
 @pytest.mark.skipif(not os.getenv("PERSISTENCE_TEST_URL"), reason="Requires migrated disposable PostgreSQL database")
 def test_live_auth_sessions_and_owner_isolated_workspaces(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", os.environ["PERSISTENCE_TEST_URL"])
@@ -83,6 +108,7 @@ def test_live_auth_sessions_and_owner_isolated_workspaces(monkeypatch):
         assert anon.get("/api/auth/session").status_code == 401
         assert anon.get("/api/businesses").status_code == 401
         assert anon.post("/api/businesses", json=raw_fixture).status_code == 401
+        assert anon.put(f"/api/businesses/{uuid4()}", json={**raw_fixture, "expected_revision": 1}).status_code == 401
         assert anon.get(f"/api/businesses/{uuid4()}").status_code == 401
         assert anon.post(f"/api/businesses/{uuid4()}/analysis").status_code == 401
         assert anon.get(f"/api/analysis-runs/{uuid4()}").status_code == 401
@@ -140,13 +166,49 @@ def test_live_auth_sessions_and_owner_isolated_workspaces(monkeypatch):
         run_id = analysed.json()["latest_run_id"]
         assert run_id is not None
         assert analysed.json()["latest_analysis"]["periods"][1]["indicators"][0]["value"] == "20"
+        assert analysed.json()["runs"] == [{
+            "run_id": run_id,
+            "input_revision": 1,
+            "rule_version": "financial-rules-v1",
+            "action_version": "preparation-actions-v1",
+            "superseded": False,
+            "created_at": analysed.json()["runs"][0]["created_at"],
+        }]
+
+        # Alice updates her workspace in place; stale revision returns 409 and prior run becomes superseded.
+        corrected_fixture = json.loads(json.dumps(raw_fixture))
+        corrected_fixture["periods"][1]["values"]["interest_expense"]["raw"] = "300000.00"
+        updated = alice.put(f"/api/businesses/{business_id}", json={**corrected_fixture, "expected_revision": 1})
+        assert updated.status_code == 200
+        assert updated.json()["input_revision"] == 2
+        assert updated.json()["latest_run_id"] is None
+        assert updated.json()["latest_analysis"] is None
+        assert updated.json()["request"]["periods"][1]["values"]["interest_expense"]["revision"] == 2
+        assert updated.json()["request"]["periods"][1]["values"]["ebit"]["revision"] == 1
+        assert updated.json()["runs"][0]["run_id"] == run_id
+        assert updated.json()["runs"][0]["superseded"] is True
+
+        stale = alice.put(f"/api/businesses/{business_id}", json={**corrected_fixture, "expected_revision": 1})
+        assert stale.status_code == 409
+        assert stale.json() == {"detail": "Workspace has been updated in another session; reload before saving"}
+
+        reanalysed = alice.post(f"/api/businesses/{business_id}/analysis")
+        assert reanalysed.status_code == 201
+        run_id_2 = reanalysed.json()["latest_run_id"]
+        assert run_id_2 != run_id
+        assert reanalysed.json()["latest_analysis"]["periods"][1]["indicators"][5]["value"] == "4"
+        assert [(r["run_id"], r["input_revision"], r["superseded"]) for r in reanalysed.json()["runs"]] == [
+            (run_id_2, 2, False),
+            (run_id, 1, True),
+        ]
 
         # Alice lists and loads her workspace and analysis run.
         listed_a = alice.get("/api/businesses")
         assert listed_a.status_code == 200
-        assert [item["id"] for item in listed_a.json()] == [business_id]
+        assert listed_a.json() == [{"id": business_id, "business_name": raw_fixture["business_name"], "input_revision": 2}]
         assert alice.get(f"/api/businesses/{business_id}").status_code == 200
         assert alice.get(f"/api/analysis-runs/{run_id}").status_code == 200
+        assert alice.get(f"/api/analysis-runs/{run_id_2}").status_code == 200
 
         # Bob cannot see Alice's business in his list and receives identical 404s for Alice's IDs and unknown IDs.
         assert bob.get("/api/businesses").json() == []
@@ -155,8 +217,12 @@ def test_live_auth_sessions_and_owner_isolated_workspaces(monkeypatch):
             res_bob = bob.get(path)
             assert res_bob.status_code == 404
             assert res_bob.json() == {"detail": "Business not found"}
+            for expected_rev in (1, 2):
+                put_bob = bob.put(path, json={**raw_fixture, "expected_revision": expected_rev})
+                assert put_bob.status_code == 404
+                assert put_bob.json() == {"detail": "Business not found"}
         assert bob.post(f"/api/businesses/{business_id}/analysis").status_code == 404
-        for path in (f"/api/analysis-runs/{run_id}", f"/api/analysis-runs/{unknown_id}"):
+        for path in (f"/api/analysis-runs/{run_id}", f"/api/analysis-runs/{run_id_2}", f"/api/analysis-runs/{unknown_id}"):
             res_run = bob.get(path)
             assert res_run.status_code == 404
             assert res_run.json() == {"detail": "Analysis not found"}

@@ -48,10 +48,15 @@ export type AnalysisResponse = {
 };
 export type SessionUser = { owner_id: string; email: string };
 export type BusinessSummary = { id: string; business_name: string; input_revision: number };
+export type AnalysisRunSummary = {
+  run_id: string; input_revision: number; rule_version: string;
+  action_version?: string | null; superseded: boolean; created_at: string;
+};
 export type WorkspaceResponse = {
   business_id: string; input_revision: number;
   request: RequestPayload;
   latest_run_id: string | null; latest_analysis: AnalysisResponse | null;
+  runs?: AnalysisRunSummary[];
 };
 
 export function analysisRequest(form: FormDraft): RequestPayload {
@@ -132,6 +137,14 @@ export async function saveWorkspace(form: FormDraft): Promise<WorkspaceResponse>
   return parseWorkspace(response);
 }
 
+export async function updateWorkspace(businessId: string, expectedRevision: number, form: FormDraft): Promise<WorkspaceResponse> {
+  const response = await fetch(`/api/businesses/${encodeURIComponent(businessId)}`, {
+    method: "PUT", credentials: "same-origin", signal: AbortSignal.timeout(30000), headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...analysisRequest(form), expected_revision: expectedRevision }),
+  });
+  return parseWorkspace(response);
+}
+
 export async function fetchWorkspace(businessId: string): Promise<WorkspaceResponse> {
   const response = await fetch(`/api/businesses/${encodeURIComponent(businessId)}`, { credentials: "same-origin", signal: AbortSignal.timeout(30000) });
   return parseWorkspace(response);
@@ -147,6 +160,7 @@ export async function analyseWorkspace(businessId: string): Promise<WorkspaceRes
 async function parseWorkspace(response: Response): Promise<WorkspaceResponse> {
   if (response.status === 401) throw new Error("Your session expired. Sign in again.");
   if (response.status === 404) throw new Error("Workspace not found.");
+  if (response.status === 409) throw new Error("Workspace has been updated in another session; reload before saving.");
   if (response.status === 422) throw new Error("The server rejected these entries. Check the business, completed years, and amount format.");
   if (!response.ok) throw new Error("Workspace service is unavailable. Check that the local backend and database are running.");
   const body: unknown = await response.json();
@@ -176,8 +190,16 @@ function validRequest(value: unknown): value is RequestPayload {
       ["rupees", "thousands", "lakhs", "crores"].includes(period.unit as string) &&
       typeof period.comparable_to_prior === "boolean" && record(period.values));
 }
+function validRuns(value: unknown): boolean {
+  return value === undefined || (Array.isArray(value) && value.every(run => record(run) &&
+    typeof run.run_id === "string" && run.run_id.length > 0 &&
+    Number.isInteger(run.input_revision) && Number(run.input_revision) > 0 &&
+    typeof run.rule_version === "string" && run.rule_version.length > 0 &&
+    (run.action_version === undefined || run.action_version === null || typeof run.action_version === "string") &&
+    typeof run.superseded === "boolean" && typeof run.created_at === "string" && run.created_at.length > 0));
+}
 function validWorkspace(value: unknown): value is WorkspaceResponse {
-  if (!record(value) || typeof value.business_id !== "string" || !Number.isInteger(value.input_revision) || !validRequest(value.request)) return false;
+  if (!record(value) || typeof value.business_id !== "string" || !Number.isInteger(value.input_revision) || !validRequest(value.request) || !validRuns(value.runs)) return false;
   if (value.latest_analysis === null || value.latest_analysis === undefined) return true;
   return validResponse(value.latest_analysis, formFromRequest(value.request));
 }

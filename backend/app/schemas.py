@@ -187,10 +187,23 @@ class SessionResponse(Model):
     email: str
 
 
+class UpdateBusinessRequest(AnalysisRequest):
+    expected_revision: int = Field(ge=1)
+
+
 class BusinessSummary(Model):
     id: UUID
     business_name: str
     input_revision: int
+
+
+class AnalysisRunSummary(Model):
+    run_id: UUID
+    input_revision: int = Field(ge=1)
+    rule_version: str
+    action_version: str | None = None
+    superseded: bool
+    created_at: datetime
 
 
 class WorkspaceResponse(Model):
@@ -199,3 +212,4 @@ class WorkspaceResponse(Model):
     request: AnalysisRequest
     latest_run_id: UUID | None = None
     latest_analysis: AnalysisResponse | None = None
+    runs: list[AnalysisRunSummary] = Field(default_factory=list)
