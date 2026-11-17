@@ -1,25 +1,50 @@
+import re
 from datetime import date, datetime
 from decimal import Decimal
-import re
 from typing import Annotated, Literal, Self
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
-from pydantic import BaseModel, ConfigDict, Field, PlainSerializer, StringConstraints, field_validator, model_validator
-
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    PlainSerializer,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 
 FinancialField = Literal[
-    "revenue", "profit_after_tax", "ebit", "interest_expense",
-    "current_assets", "current_liabilities", "total_assets", "total_liabilities",
-    "total_equity", "short_term_borrowings", "long_term_borrowings", "current_maturities",
+    "revenue",
+    "profit_after_tax",
+    "ebit",
+    "interest_expense",
+    "current_assets",
+    "current_liabilities",
+    "total_assets",
+    "total_liabilities",
+    "total_equity",
+    "short_term_borrowings",
+    "long_term_borrowings",
+    "current_maturities",
 ]
 Unit = Literal["rupees", "thousands", "lakhs", "crores"]
 Indicator = Literal[
-    "revenue_growth", "net_profit_margin", "working_capital",
-    "current_ratio", "debt_to_equity", "interest_coverage",
+    "revenue_growth",
+    "net_profit_margin",
+    "working_capital",
+    "current_ratio",
+    "debt_to_equity",
+    "interest_coverage",
 ]
 EvidenceState = Literal["Supported", "Needs review", "Not assessed", "Not meaningful"]
-DecimalValue = Annotated[Decimal, PlainSerializer(lambda value: format(value, "f"), return_type=str, when_used="json")]
+DecimalValue = Annotated[
+    Decimal,
+    PlainSerializer(
+        lambda value: format(value, "f"), return_type=str, when_used="json"
+    ),
+]
 
 
 class Model(BaseModel):
@@ -37,7 +62,9 @@ class FinancialValue(Model):
     def validate_amount(cls, value: str | None) -> str | None:
         if value is not None and value.strip():
             if not re.fullmatch(r"[+-]?[0-9]{1,15}(?:\.[0-9]{1,2})?", value.strip()):
-                raise ValueError("Use plain decimal text with at most 15 integer and 2 decimal digits")
+                raise ValueError(
+                    "Use plain decimal text with at most 15 integer and 2 decimal digits"
+                )
         return value
 
     @property
@@ -69,7 +96,9 @@ class FinancialPeriod(Model):
 
 
 class AnalysisRequest(Model):
-    business_name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=120)]
+    business_name: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=120)
+    ]
     currency: Literal["INR"] = "INR"
     basis: Literal["standalone"] = "standalone"
     periods: list[FinancialPeriod] = Field(min_length=1, max_length=3)
@@ -156,22 +185,31 @@ class AnalysisResponse(Model):
     rule_version: Literal["financial-rules-v1"] = "financial-rules-v1"
     action_version: Literal["preparation-actions-v1"] | None = None
     actions: list[PreparationAction] = Field(default_factory=list)
-    limitations: list[str] = Field(default_factory=lambda: [
-        "Financial rules are provisional pending finance-reviewer validation.",
-        "Cash generation is not assessed; no cash-flow statement was analysed.",
-        "Borrowings exclude leases and count current maturities once.",
-    ])
+    limitations: list[str] = Field(
+        default_factory=lambda: [
+            "Financial rules are provisional pending finance-reviewer validation.",
+            "Cash generation is not assessed; no cash-flow statement was analysed.",
+            "Borrowings exclude leases and count current maturities once.",
+        ]
+    )
     periods: list[PeriodAnalysis] = Field(min_length=1, max_length=3)
 
     @model_validator(mode="after")
     def versioned_actions(self) -> Self:
         if bool(self.actions) != (self.action_version is not None):
-            raise ValueError("Preparation actions require their version; legacy responses have neither")
+            raise ValueError(
+                "Preparation actions require their version; legacy responses have neither"
+            )
         return self
 
 
 class CredentialsRequest(Model):
-    email: Annotated[str, StringConstraints(strip_whitespace=True, to_lower=True, min_length=3, max_length=254)]
+    email: Annotated[
+        str,
+        StringConstraints(
+            strip_whitespace=True, to_lower=True, min_length=3, max_length=254
+        ),
+    ]
     password: Annotated[str, StringConstraints(min_length=12, max_length=128)]
 
     @field_validator("email")
@@ -215,9 +253,12 @@ class AnalysisRunResponse(AnalysisResponse):
 
     def __eq__(self, other: object) -> bool:
         if type(other) is AnalysisResponse:
-            return AnalysisResponse.model_construct(
-                **{k: getattr(self, k) for k in AnalysisResponse.model_fields}
-            ) == other
+            return (
+                AnalysisResponse.model_construct(
+                    **{k: getattr(self, k) for k in AnalysisResponse.model_fields}
+                )
+                == other
+            )
         return super().__eq__(other)
 
 

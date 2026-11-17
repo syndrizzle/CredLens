@@ -156,14 +156,14 @@ Run migrations from `backend/` using the **direct** URL in `DATABASE_URL_UNPOOLE
 .venv/bin/python -m alembic check
 ```
 
-Environment variables take precedence over the root env file. To test migrations and live persistence/authentication, set both `DATABASE_URL_UNPOOLED` and `PERSISTENCE_TEST_URL` to a migrated PostgreSQL test database. Never print or commit these URLs. Run:
+Environment variables take precedence over the root env file. For manual migration commands below, set `DATABASE_URL_UNPOOLED` to a disposable test database's direct URL. Set `PERSISTENCE_TEST_URL` to that same direct URL for live persistence/authentication tests. Never print or commit these URLs. Run:
 
 ```bash
 .venv/bin/python -m alembic upgrade head
 .venv/bin/python -m pytest tests/test_persistence.py tests/test_auth.py -q
 ```
 
-The persistence and authentication tests commit fictional records and temporary accounts to verify reload, revision history, optimistic concurrency (`409`), and owner isolation across connections, then remove only their own generated owner/account/session/business records. Live database cases skip unless `PERSISTENCE_TEST_URL` is set, and expect the database to be migrated already. Test `alembic downgrade` only on a disposable branch: downgrade drops tables and their data. Default application startup never migrates automatically.
+The persistence and authentication tests commit fictional records and temporary accounts to verify reload, revision history, optimistic concurrency (`409`), and owner isolation across connections, then remove only their own generated owner/account/session/business records. Live database cases skip unless `PERSISTENCE_TEST_URL` is set, and expect the database to be migrated already. The populated-upgrade test temporarily binds Alembic to `PERSISTENCE_TEST_URL`, clears inherited engine caches, and checks that the migration engine matches the fixture before any DDL. It rejects Neon pooled URLs; use a direct disposable database URL. This test downgrades/upgrades the whole test schema, so the selected database must be disposable. `tests/test_migration_safety.py` checks mismatched/inherited/cached connection settings offline with migration calls intercepted. Default application startup never migrates automatically.
 
 To load the unreviewed fictional Aster Components fixture into the database selected by `DATABASE_URL`:
 

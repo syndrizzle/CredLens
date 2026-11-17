@@ -368,7 +368,11 @@ def test_concurrent_correction_interleaves_keep_workspace_reads_and_analysis_sna
 
 def test_populated_upgrade_and_preexisting_baseline_preserve_monotonic_revisions(db, request_data, monkeypatch):
     engine, owner = db
-    monkeypatch.setenv("DATABASE_URL_UNPOOLED", os.getenv("DATABASE_URL_UNPOOLED", os.environ["PERSISTENCE_TEST_URL"]))
+    monkeypatch.setenv("DATABASE_URL_UNPOOLED", os.environ["PERSISTENCE_TEST_URL"])
+    get_engine.cache_clear()
+    migration_engine = get_engine(direct=True)
+    if migration_engine.url != engine.url or "-pooler." in (migration_engine.url.host or ""):
+        pytest.fail("Migration test requires the same direct disposable database as the persistence fixture")
     alembic_cfg = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
     business_id = uuid4()
 

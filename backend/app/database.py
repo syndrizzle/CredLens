@@ -5,14 +5,16 @@ from pathlib import Path
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine, make_url
-from sqlalchemy.pool import NullPool
 from sqlalchemy.exc import ArgumentError
+from sqlalchemy.pool import NullPool
 
 
 @lru_cache
 def get_engine(*, direct: bool = False) -> Engine:
     root = Path(__file__).resolve().parents[2]
-    load_dotenv(root / (".env" if (root / ".env").exists() else ".env.local"), override=False)
+    load_dotenv(
+        root / (".env" if (root / ".env").exists() else ".env.local"), override=False
+    )
     variable = "DATABASE_URL_UNPOOLED" if direct else "DATABASE_URL"
     raw = os.environ.get(variable)
     if not raw:
@@ -27,8 +29,12 @@ def get_engine(*, direct: bool = False) -> Engine:
     if "sslmode" not in url.query:
         url = url.update_query_dict({"sslmode": "require"})
     # Neon supplies pooling; avoid keeping a second pool of idle connections locally.
-    return create_engine(url, poolclass=NullPool, hide_parameters=True,
-                         connect_args={"connect_timeout": 10, "prepare_threshold": None})
+    return create_engine(
+        url,
+        poolclass=NullPool,
+        hide_parameters=True,
+        connect_args={"connect_timeout": 10, "prepare_threshold": None},
+    )
 
 
 def check_database() -> None:

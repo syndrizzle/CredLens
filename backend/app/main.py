@@ -7,10 +7,33 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.analysis import analyse
-from app.auth import SESSION_COOKIE, SESSION_MAX_AGE, authenticate_account, register_account, resolve_session, revoke_session
+from app.auth import (
+    SESSION_COOKIE,
+    SESSION_MAX_AGE,
+    authenticate_account,
+    register_account,
+    resolve_session,
+    revoke_session,
+)
 from app.database import check_database, get_engine
-from app.persistence import list_businesses, load_analysis, load_workspace, save_analysis, save_business, update_business
-from app.schemas import AnalysisRequest, AnalysisResponse, AnalysisRunResponse, BusinessSummary, CredentialsRequest, SessionResponse, UpdateBusinessRequest, WorkspaceResponse
+from app.persistence import (
+    list_businesses,
+    load_analysis,
+    load_workspace,
+    save_analysis,
+    save_business,
+    update_business,
+)
+from app.schemas import (
+    AnalysisRequest,
+    AnalysisResponse,
+    AnalysisRunResponse,
+    BusinessSummary,
+    CredentialsRequest,
+    SessionResponse,
+    UpdateBusinessRequest,
+    WorkspaceResponse,
+)
 
 app = FastAPI(title="CredLens", version="0.1.0")
 
@@ -26,8 +49,13 @@ def db_transaction():
 
 def set_session_cookie(response: Response, request: Request, token: str) -> None:
     response.set_cookie(
-        key=SESSION_COOKIE, value=token, max_age=SESSION_MAX_AGE,
-        httponly=True, samesite="lax", secure=request.url.scheme == "https", path="/",
+        key=SESSION_COOKIE,
+        value=token,
+        max_age=SESSION_MAX_AGE,
+        httponly=True,
+        samesite="lax",
+        secure=request.url.scheme == "https",
+        path="/",
     )
 
 
@@ -79,10 +107,14 @@ def database_health() -> dict[str, str]:
 
 
 @app.post("/api/auth/register", response_model=SessionResponse, status_code=201)
-def register(payload: CredentialsRequest, request: Request, response: Response) -> SessionResponse:
+def register(
+    payload: CredentialsRequest, request: Request, response: Response
+) -> SessionResponse:
     with db_transaction() as connection:
         try:
-            session, token = register_account(connection, payload.email, payload.password)
+            session, token = register_account(
+                connection, payload.email, payload.password
+            )
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from None
     set_session_cookie(response, request, token)
@@ -90,10 +122,14 @@ def register(payload: CredentialsRequest, request: Request, response: Response) 
 
 
 @app.post("/api/auth/login", response_model=SessionResponse)
-def login(payload: CredentialsRequest, request: Request, response: Response) -> SessionResponse:
+def login(
+    payload: CredentialsRequest, request: Request, response: Response
+) -> SessionResponse:
     with db_transaction() as connection:
         try:
-            session, token = authenticate_account(connection, payload.email, payload.password)
+            session, token = authenticate_account(
+                connection, payload.email, payload.password
+            )
         except PermissionError as exc:
             raise HTTPException(status_code=401, detail=str(exc)) from None
     set_session_cookie(response, request, token)
@@ -130,11 +166,19 @@ def create_business(payload: AnalysisRequest, request: Request) -> WorkspaceResp
 
 
 @app.put("/api/businesses/{business_id}", response_model=WorkspaceResponse)
-def replace_business(business_id: UUID, payload: UpdateBusinessRequest, request: Request) -> WorkspaceResponse:
+def replace_business(
+    business_id: UUID, payload: UpdateBusinessRequest, request: Request
+) -> WorkspaceResponse:
     with db_transaction() as connection:
         session = require_session(connection, request)
         try:
-            update_business(connection, session.owner_id, business_id, payload, payload.expected_revision)
+            update_business(
+                connection,
+                session.owner_id,
+                business_id,
+                payload,
+                payload.expected_revision,
+            )
             return load_workspace(connection, session.owner_id, business_id)
         except LookupError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from None
@@ -152,7 +196,11 @@ def get_business(business_id: UUID, request: Request) -> WorkspaceResponse:
             raise HTTPException(status_code=404, detail=str(exc)) from None
 
 
-@app.post("/api/businesses/{business_id}/analysis", response_model=WorkspaceResponse, status_code=201)
+@app.post(
+    "/api/businesses/{business_id}/analysis",
+    response_model=WorkspaceResponse,
+    status_code=201,
+)
 def create_business_analysis(business_id: UUID, request: Request) -> WorkspaceResponse:
     with db_transaction() as connection:
         session = require_session(connection, request)
