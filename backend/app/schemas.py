@@ -206,6 +206,21 @@ class AnalysisRunSummary(Model):
     created_at: datetime
 
 
+class AnalysisRunResponse(AnalysisResponse):
+    run_id: UUID
+    business_id: UUID
+    input_revision: int = Field(ge=1)
+    superseded: bool
+    created_at: datetime
+
+    def __eq__(self, other: object) -> bool:
+        if type(other) is AnalysisResponse:
+            return AnalysisResponse.model_construct(
+                **{k: getattr(self, k) for k in AnalysisResponse.model_fields}
+            ) == other
+        return super().__eq__(other)
+
+
 class WorkspaceResponse(Model):
     business_id: UUID
     input_revision: int

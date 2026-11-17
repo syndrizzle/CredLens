@@ -10,7 +10,7 @@ from app.analysis import analyse
 from app.auth import SESSION_COOKIE, SESSION_MAX_AGE, authenticate_account, register_account, resolve_session, revoke_session
 from app.database import check_database, get_engine
 from app.persistence import list_businesses, load_analysis, load_workspace, save_analysis, save_business, update_business
-from app.schemas import AnalysisRequest, AnalysisResponse, BusinessSummary, CredentialsRequest, SessionResponse, UpdateBusinessRequest, WorkspaceResponse
+from app.schemas import AnalysisRequest, AnalysisResponse, AnalysisRunResponse, BusinessSummary, CredentialsRequest, SessionResponse, UpdateBusinessRequest, WorkspaceResponse
 
 app = FastAPI(title="CredLens", version="0.1.0")
 
@@ -163,8 +163,8 @@ def create_business_analysis(business_id: UUID, request: Request) -> WorkspaceRe
             raise HTTPException(status_code=404, detail=str(exc)) from None
 
 
-@app.get("/api/analysis-runs/{run_id}", response_model=AnalysisResponse)
-def get_analysis_run(run_id: UUID, request: Request) -> AnalysisResponse:
+@app.get("/api/analysis-runs/{run_id}", response_model=AnalysisRunResponse)
+def get_analysis_run(run_id: UUID, request: Request) -> AnalysisRunResponse:
     with db_transaction() as connection:
         session = require_session(connection, request)
         try:

@@ -40,6 +40,27 @@ def upgrade() -> None:
     ))
     op.create_foreign_key('figures_reviewed_by_fkey', 'figures', 'owners', ['reviewed_by'], ['id'])
     op.create_check_constraint('figure_reviewer', 'figures', 'reviewed = (reviewed_by IS NOT NULL)')
+    op.execute(sa.text(
+        "INSERT INTO revisions (business_id, input_revision, actor_id, inputs, created_at) "
+        "SELECT b.id, b.input_revision, b.owner_id, "
+        "jsonb_build_object("
+        "'business_name', b.name, 'currency', b.currency, 'basis', b.basis, "
+        "'periods', COALESCE(("
+        "SELECT jsonb_agg("
+        "jsonb_build_object("
+        "'year_start', p.year_start, 'unit', p.unit, 'comparable_to_prior', p.comparable_to_prior, "
+        "'values', COALESCE(("
+        "SELECT jsonb_object_agg("
+        "f.field, jsonb_build_object('raw', f.raw, 'reviewed', f.reviewed, 'revision', f.revision, 'origin', f.origin)"
+        ") FROM figures AS f WHERE f.period_id = p.id"
+        "), '{}'::jsonb)"
+        ") ORDER BY p.year_start"
+        ") FROM periods AS p WHERE p.business_id = b.id"
+        "), '[]'::jsonb)"
+        "), b.created_at "
+        "FROM businesses AS b "
+        "ON CONFLICT (business_id, input_revision) DO NOTHING"
+    ))
 
 
 def downgrade() -> None:

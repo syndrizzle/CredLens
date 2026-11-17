@@ -86,6 +86,27 @@ def test_update_business_route_enforces_schema_and_maps_conflict_and_not_found(m
     assert missing.status_code == 404
     assert missing.json() == {"detail": "Business not found"}
 
+    rid = uuid4()
+    analysed_payload = main_module.analyse(main_module.AnalysisRequest.model_validate(raw_fixture))
+    monkeypatch.setattr(
+        main_module,
+        "load_analysis",
+        lambda *_args: main_module.AnalysisRunResponse(
+            **analysed_payload.model_dump(),
+            run_id=rid,
+            business_id=bid,
+            input_revision=1,
+            superseded=True,
+            created_at=datetime.now(timezone.utc),
+        ),
+    )
+    run_resp = client.get(f"/api/analysis-runs/{rid}")
+    assert run_resp.status_code == 200
+    assert run_resp.json()["run_id"] == str(rid)
+    assert run_resp.json()["business_id"] == str(bid)
+    assert run_resp.json()["input_revision"] == 1
+    assert run_resp.json()["superseded"] is True
+
 
 @pytest.mark.skipif(not os.getenv("PERSISTENCE_TEST_URL"), reason="Requires migrated disposable PostgreSQL database")
 def test_live_auth_sessions_and_owner_isolated_workspaces(monkeypatch):
@@ -174,6 +195,12 @@ def test_live_auth_sessions_and_owner_isolated_workspaces(monkeypatch):
             "superseded": False,
             "created_at": analysed.json()["runs"][0]["created_at"],
         }]
+        direct_run_1 = alice.get(f"/api/analysis-runs/{run_id}")
+        assert direct_run_1.status_code == 200
+        assert direct_run_1.json()["run_id"] == run_id
+        assert direct_run_1.json()["business_id"] == business_id
+        assert direct_run_1.json()["input_revision"] == 1
+        assert direct_run_1.json()["superseded"] is False
 
         # Alice updates her workspace in place; stale revision returns 409 and prior run becomes superseded.
         corrected_fixture = json.loads(json.dumps(raw_fixture))
@@ -187,6 +214,10 @@ def test_live_auth_sessions_and_owner_isolated_workspaces(monkeypatch):
         assert updated.json()["request"]["periods"][1]["values"]["ebit"]["revision"] == 1
         assert updated.json()["runs"][0]["run_id"] == run_id
         assert updated.json()["runs"][0]["superseded"] is True
+        direct_run_1_stale = alice.get(f"/api/analysis-runs/{run_id}")
+        assert direct_run_1_stale.status_code == 200
+        assert direct_run_1_stale.json()["input_revision"] == 1
+        assert direct_run_1_stale.json()["superseded"] is True
 
         stale = alice.put(f"/api/businesses/{business_id}", json={**corrected_fixture, "expected_revision": 1})
         assert stale.status_code == 409
@@ -207,8 +238,14 @@ def test_live_auth_sessions_and_owner_isolated_workspaces(monkeypatch):
         assert listed_a.status_code == 200
         assert listed_a.json() == [{"id": business_id, "business_name": raw_fixture["business_name"], "input_revision": 2}]
         assert alice.get(f"/api/businesses/{business_id}").status_code == 200
-        assert alice.get(f"/api/analysis-runs/{run_id}").status_code == 200
-        assert alice.get(f"/api/analysis-runs/{run_id_2}").status_code == 200
+        run_1_res = alice.get(f"/api/analysis-runs/{run_id}")
+        assert run_1_res.status_code == 200
+        assert run_1_res.json()["input_revision"] == 1
+        assert run_1_res.json()["superseded"] is True
+        run_2_res = alice.get(f"/api/analysis-runs/{run_id_2}")
+        assert run_2_res.status_code == 200
+        assert run_2_res.json()["input_revision"] == 2
+        assert run_2_res.json()["superseded"] is False
 
         # Bob cannot see Alice's business in his list and receives identical 404s for Alice's IDs and unknown IDs.
         assert bob.get("/api/businesses").json() == []
@@ -242,6 +279,157 @@ def test_live_auth_sessions_and_owner_isolated_workspaces(monkeypatch):
         assert alice.get("/api/auth/session").status_code == 200
         assert alice.post("/api/auth/logout").status_code == 200
         assert alice.get("/api/auth/session").status_code == 401
+    finally:
+        with engine.begin() as conn:
+            for owner_id in created_owners:
+                conn.execute(businesses.delete().where(businesses.c.owner_id == owner_id))
+                conn.execute(owners.delete().where(owners.c.id == owner_id))
+        engine.dispose()
+        get_engine.cache_clear()
+
+
+@pytest.mark.skipif(not os.getenv("PERSISTENCE_TEST_URL"), reason="Requires migrated disposable PostgreSQL database")
+def test_phase2_access_isolation_matrix_and_requirement_traceability(monkeypatch):
+    """P2-05 verification matrix covering >=28 negative access cases across all Phase 2 endpoints
+    plus end-to-end FR01/04-06/10 and NFR02/03 persistence, revision, and dependency checks."""
+    monkeypatch.setenv("DATABASE_URL", os.environ["PERSISTENCE_TEST_URL"])
+    get_engine.cache_clear()
+    engine = get_engine()
+    created_owners = []
+
+    raw_fixture = json.loads((Path(__file__).parent / "fixtures/aster_components.json").read_text())["request"]
+    for period in raw_fixture["periods"]:
+        for figure in period["values"].values():
+            figure["reviewed"] = True
+
+    try:
+        alice = TestClient(app)
+        bob = TestClient(app)
+        anon = TestClient(app)
+
+        email_a = f"p205-alice-{uuid4().hex[:8]}@example.com"
+        reg_a = alice.post("/api/auth/register", json={"email": email_a, "password": "alice-password-123"})
+        assert reg_a.status_code == 201
+        owner_a = reg_a.json()["owner_id"]
+        created_owners.append(owner_a)
+
+        email_b = f"p205-bob-{uuid4().hex[:8]}@example.com"
+        reg_b = bob.post("/api/auth/register", json={"email": email_b, "password": "bob-password-12345"})
+        assert reg_b.status_code == 201
+        owner_b = reg_b.json()["owner_id"]
+        created_owners.append(owner_b)
+
+        # FR01 / FR05 / FR06 / FR10: Alice creates workspace with missing interest_expense in FY2024.
+        missing_interest_fixture = json.loads(json.dumps(raw_fixture))
+        del missing_interest_fixture["periods"][1]["values"]["interest_expense"]
+        created_a = alice.post("/api/businesses", json=missing_interest_fixture)
+        assert created_a.status_code == 201
+        business_a = created_a.json()["business_id"]
+        assert created_a.json()["input_revision"] == 1
+
+        analysed_a1 = alice.post(f"/api/businesses/{business_a}/analysis")
+        assert analysed_a1.status_code == 201
+        run_a1 = analysed_a1.json()["latest_run_id"]
+        ind_by_key_a1 = {i["indicator"]: i for i in analysed_a1.json()["latest_analysis"]["periods"][1]["indicators"]}
+        assert ind_by_key_a1["interest_coverage"]["state"] == "Not assessed"
+        assert ind_by_key_a1["interest_coverage"]["value"] is None
+        assert all(ind_by_key_a1[k]["state"] == "Supported" for k in (
+            "revenue_growth", "net_profit_margin", "working_capital", "current_ratio", "debt_to_equity"
+        ))
+        actions_a1 = analysed_a1.json()["latest_analysis"]["actions"]
+        assert [(a["category"], a["code"], a["inputs"]) for a in actions_a1[:2]] == [
+            ("missing", "missing_prior_year", [{"year_start": 2022, "field": "revenue"}]),
+            ("missing", "missing_input", [{"year_start": 2024, "field": "interest_expense"}]),
+        ]
+
+        # FR04: Alice supplies and confirms interest_expense in place (revision 2), superseding run_a1.
+        restored_fixture = json.loads(json.dumps(raw_fixture))
+        restored_fixture["periods"][1]["values"]["interest_expense"] = {"raw": "300000.00", "reviewed": True}
+        updated_a2 = alice.put(
+            f"/api/businesses/{business_a}",
+            json={**restored_fixture, "expected_revision": 1},
+        )
+        assert updated_a2.status_code == 200
+        assert updated_a2.json()["input_revision"] == 2
+        assert updated_a2.json()["latest_run_id"] is None
+        assert updated_a2.json()["latest_analysis"] is None
+        assert updated_a2.json()["runs"][0]["run_id"] == run_a1
+        assert updated_a2.json()["runs"][0]["superseded"] is True
+
+        analysed_a2 = alice.post(f"/api/businesses/{business_a}/analysis")
+        assert analysed_a2.status_code == 201
+        run_a2 = analysed_a2.json()["latest_run_id"]
+        ind_by_key_a2 = {i["indicator"]: i for i in analysed_a2.json()["latest_analysis"]["periods"][1]["indicators"]}
+        assert ind_by_key_a2["interest_coverage"]["state"] == "Supported"
+        assert ind_by_key_a2["interest_coverage"]["value"] == "4"
+        assert alice.get(f"/api/analysis-runs/{run_a1}").json()["superseded"] is True
+        assert alice.get(f"/api/analysis-runs/{run_a2}").json()["superseded"] is False
+
+        # Negative Access Matrix (NFR02 / NFR03): 28 distinct negative access cases.
+        unknown_bid = str(uuid4())
+        unknown_rid = str(uuid4())
+        protected_calls = [
+            ("GET", "/api/auth/session", None),
+            ("GET", "/api/businesses", None),
+            ("POST", "/api/businesses", raw_fixture),
+            ("GET", f"/api/businesses/{business_a}", None),
+            ("PUT", f"/api/businesses/{business_a}", {**raw_fixture, "expected_revision": 2}),
+            ("POST", f"/api/businesses/{business_a}/analysis", None),
+            ("GET", f"/api/analysis-runs/{run_a1}", None),
+        ]
+
+        # Cases 1-7: Unauthenticated requests across all 7 protected routes.
+        for method, path, payload in protected_calls:
+            resp = anon.request(method, path, json=payload) if payload is not None else anon.request(method, path)
+            assert resp.status_code == 401
+            assert resp.json() == {"detail": "Authentication required"}
+
+        # Cases 8-14: Forged/tampered session cookie across all 7 protected routes.
+        forged = TestClient(app)
+        forged.cookies.set(SESSION_COOKIE, "forged-nonexistent-token-value-1234567890")
+        for method, path, payload in protected_calls:
+            resp = forged.request(method, path, json=payload) if payload is not None else forged.request(method, path)
+            assert resp.status_code == 401
+            assert resp.json() == {"detail": "Authentication required"}
+
+        # Cases 15-20: Cross-owner (Bob) access to Alice's business & runs (uniform 404).
+        assert bob.get(f"/api/businesses/{business_a}").status_code == 404
+        assert bob.get(f"/api/businesses/{business_a}").json() == {"detail": "Business not found"}
+        assert bob.put(f"/api/businesses/{business_a}", json={**raw_fixture, "expected_revision": 1}).status_code == 404
+        assert bob.put(f"/api/businesses/{business_a}", json={**raw_fixture, "expected_revision": 2}).status_code == 404
+        assert bob.post(f"/api/businesses/{business_a}/analysis").status_code == 404
+        assert bob.post(f"/api/businesses/{business_a}/analysis").json() == {"detail": "Business not found"}
+        assert bob.get(f"/api/analysis-runs/{run_a1}").status_code == 404
+        assert bob.get(f"/api/analysis-runs/{run_a1}").json() == {"detail": "Analysis not found"}
+        assert bob.get(f"/api/analysis-runs/{run_a2}").status_code == 404
+        assert bob.get(f"/api/analysis-runs/{run_a2}").json() == {"detail": "Analysis not found"}
+
+        # Cases 21-24: Authenticated owner (Alice) accessing non-existent IDs returns identical 404s.
+        assert alice.get(f"/api/businesses/{unknown_bid}").status_code == 404
+        assert alice.get(f"/api/businesses/{unknown_bid}").json() == {"detail": "Business not found"}
+        assert alice.put(f"/api/businesses/{unknown_bid}", json={**raw_fixture, "expected_revision": 1}).status_code == 404
+        assert alice.post(f"/api/businesses/{unknown_bid}/analysis").status_code == 404
+        assert alice.get(f"/api/analysis-runs/{unknown_rid}").status_code == 404
+        assert alice.get(f"/api/analysis-runs/{unknown_rid}").json() == {"detail": "Analysis not found"}
+
+        # Cases 25-26: Client-supplied owner_id injection attempts on POST and PUT are rejected (422).
+        assert bob.post("/api/businesses", json={**raw_fixture, "owner_id": owner_a}).status_code == 422
+        assert bob.put(f"/api/businesses/{business_a}", json={**raw_fixture, "expected_revision": 2, "owner_id": owner_a}).status_code == 422
+
+        # Cases 27-28: Expired session and logged-out session rejected across workspace mutation routes.
+        bob_login2 = TestClient(app)
+        assert bob_login2.post("/api/auth/login", json={"email": email_b, "password": "bob-password-12345"}).status_code == 200
+        token_b2 = bob_login2.cookies.get(SESSION_COOKIE)
+        with engine.begin() as conn:
+            conn.execute(
+                sessions.update()
+                .where(sessions.c.token_hash == _token_hash(token_b2))
+                .values(expires_at=datetime.now(timezone.utc) - timedelta(seconds=10))
+            )
+        assert bob_login2.post("/api/businesses", json=raw_fixture).status_code == 401
+
+        assert bob.post("/api/auth/logout").status_code == 200
+        assert bob.post("/api/businesses", json=raw_fixture).status_code == 401
     finally:
         with engine.begin() as conn:
             for owner_id in created_owners:
