@@ -12,12 +12,12 @@ from app.database import get_engine
 from app.documents import (
     DocumentRejectError,
     MAX_PDF_BYTES,
-    _acquire_active_job,
-    _release_active_job,
+    delete_document,
+    get_document_file,
+    list_documents,
     document_file_path,
     inspect_pdf_bytes,
     read_bounded_upload,
-    reconcile_interrupted_documents,
     retry_document_processing,
     sanitize_pdf_filename,
     upload_and_process_document,
@@ -204,156 +204,191 @@ class TestProtectedPdfPersistence:
             engine.dispose()
             get_engine.cache_clear()
 
-    def test_upload_validation_no_orphan_data_active_job_limit_interrupted_recovery_and_owner_isolation(
-        self, env
-    ):
+    @pytest.fixture
+    def workspace(self, env):
+        engine, storage, model, created = env
+        owner, other = uuid4(), uuid4()
+        created.extend([owner, other])
+        with engine.begin() as c:
+            c.execute(owners.insert(), [{"id": owner}, {"id": other}])
+            business = save_business(c, owner, model)
+            second = save_business(c, owner, model)
+        return engine, storage, owner, other, business, second
+
+    def test_validation_durable_processing_and_isolation(self, workspace, monkeypatch):
+        import app.documents as service
+        engine, storage, owner, other, business, second = workspace
+        payload = build_minimal_pdf(["Revenue 120000"])
+        with pytest.raises(DocumentRejectError):
+            upload_and_process_document(engine, owner, business, "bad.txt", "text/plain", io.BytesIO(payload))
+        assert not list(storage.rglob("*.pdf"))
+        original = service.inspect_pdf_file
+
+        def observe(path):
+            with engine.begin() as c:
+                visible = list_documents(c, owner, business)
+            assert len(visible) == 1 and visible[0].status == "processing"
+            with pytest.raises(DocumentRejectError, match="Another PDF job"):
+                upload_and_process_document(engine, owner, second, "busy.pdf", "application/pdf", io.BytesIO(payload))
+            # Unknown/cross-business documents stay 404 even while this owner is busy.
+            with pytest.raises(LookupError):
+                retry_document_processing(engine, owner, second, visible[0].id)
+            with pytest.raises(LookupError):
+                delete_document(engine, owner, business, uuid4())
+            return original(path)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(service, "inspect_pdf_file", observe)
+            doc = upload_and_process_document(engine, owner, business, "good.pdf", "application/pdf", io.BytesIO(payload))
+        assert doc.status == "ready" and doc.page_count == 1
+        path = document_file_path(owner, business, doc.id)
+        assert path.read_bytes() == payload
+        with engine.begin() as c:
+            assert load_workspace(c, owner, business).documents[0].id == doc.id
+            for bad_owner, bad_business in [(other, business), (owner, second)]:
+                with pytest.raises(LookupError):
+                    get_document_file(c, bad_owner, bad_business, doc.id)
+        for content, code in [(build_minimal_pdf([""]), "scanned_only_pdf"), (build_minimal_pdf(["x"] * 51), "too_many_pages")]:
+            failed = upload_and_process_document(engine, owner, business, "failed.pdf", "application/pdf", io.BytesIO(content))
+            assert failed.status == "failed" and failed.error_code == code
+            assert document_file_path(owner, business, failed.id).exists()
+            with engine.begin() as c, pytest.raises(LookupError):
+                get_document_file(c, owner, business, failed.id)
+            delete_document(engine, owner, business, failed.id)
+        delete_document(engine, owner, business, doc.id)
+        assert not path.exists()
+
+    def test_commit_failures_leave_recoverable_files(self, workspace, monkeypatch):
+        from contextlib import contextmanager
+        engine, storage, owner, _, business, _ = workspace
+        payload = build_minimal_pdf(["Revenue 120000"])
+        from sqlalchemy import event
+
+        @contextmanager
+        def fail_commit(operation, status=None, error_code=None):
+            def after_execute(c, cursor, statement, parameters, context, many):
+                if (statement.startswith(operation)
+                        and (status is None or parameters.get("status") == status)
+                        and (error_code is None or parameters.get("error_code") == error_code)):
+                    c.info["document_test_fail_commit"] = True
+            def on_commit(c):
+                if c.info.pop("document_test_fail_commit", False):
+                    raise RuntimeError("simulated commit failure")
+            event.listen(engine, "after_cursor_execute", after_execute)
+            event.listen(engine, "commit", on_commit)
+            try:
+                yield
+            finally:
+                event.remove(engine, "commit", on_commit)
+                event.remove(engine, "after_cursor_execute", after_execute)
+
+        # Initial metadata failure occurs before any file is written.
+        with fail_commit("INSERT INTO documents"), pytest.raises(RuntimeError, match="simulated commit failure"):
+            upload_and_process_document(engine, owner, business, "fail.pdf", "application/pdf", io.BytesIO(payload))
+        assert not list(storage.rglob("*.pdf"))
+        with engine.connect() as c:
+            assert c.execute(select(func.count()).select_from(documents)).scalar_one() == 0
+        # Final status failure leaves committed processing metadata and its file.
+        with fail_commit("UPDATE documents", "ready"), pytest.raises(RuntimeError, match="simulated commit failure"):
+            upload_and_process_document(engine, owner, business, "recover.pdf", "application/pdf", io.BytesIO(payload))
+        with engine.begin() as c:
+            failed = list_documents(c, owner, business)[0]
+        assert failed.error_code == "interrupted_job"
+        path = document_file_path(owner, business, failed.id)
+        assert path.exists()
+        ready = retry_document_processing(engine, owner, business, failed.id)
+        assert ready.status == "ready"
+        # Failed removal-intent commit cannot delete a retained PDF.
+        with fail_commit("UPDATE documents", "failed", "deletion_pending"), pytest.raises(RuntimeError, match="simulated commit failure"):
+            delete_document(engine, owner, business, ready.id)
+        with engine.begin() as c:
+            assert get_document_file(c, owner, business, ready.id)[1].read_bytes() == payload
+        # Failed final deletion leaves a durable pending-removal record.
+        with fail_commit("DELETE FROM documents"), pytest.raises(RuntimeError, match="simulated commit failure"):
+            delete_document(engine, owner, business, ready.id)
+        assert not path.exists()
+        with engine.begin() as c:
+            assert list_documents(c, owner, business)[0].error_code == "deletion_pending"
+        with pytest.raises(DocumentRejectError) as exc:
+            retry_document_processing(engine, owner, business, ready.id)
+        assert exc.value.code == "not_retryable"
+        delete_document(engine, owner, business, ready.id)
+        with engine.begin() as c:
+            assert list_documents(c, owner, business) == []
+
+    def test_storage_failure_and_failed_unlink_can_be_completed(self, workspace, monkeypatch):
+        import app.documents as service
+        engine, _, owner, _, business, _ = workspace
+        def disk_full(path, data):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.with_suffix(".tmp").write_bytes(data[:10])
+            raise OSError("disk full")
+        with monkeypatch.context() as patch:
+            patch.setattr(service, "_write_pdf_atomically", disk_full)
+            failed = upload_and_process_document(engine, owner, business, "full.pdf", "application/pdf", io.BytesIO(build_minimal_pdf(["Revenue"])))
+        assert failed.status == "failed" and failed.error_code == "storage_unavailable"
+        temporary = document_file_path(owner, business, failed.id).with_suffix(".tmp")
+        assert temporary.exists()
+        delete_document(engine, owner, business, failed.id)
+        assert not temporary.exists()
+        doc = upload_and_process_document(engine, owner, business, "good.pdf", "application/pdf", io.BytesIO(build_minimal_pdf(["Revenue"])))
+        with monkeypatch.context() as patch:
+            def denied(path):
+                raise PermissionError("locked")
+            patch.setattr(service, "_remove_file_and_empty_dirs", denied)
+            with pytest.raises(DocumentRejectError) as exc:
+                delete_document(engine, owner, business, doc.id)
+        assert exc.value.code == "deletion_pending"
+        path = document_file_path(owner, business, doc.id)
+        assert path.exists()
+        with engine.begin() as c:
+            assert list_documents(c, owner, business)[0].error_code == "deletion_pending"
+            with pytest.raises(LookupError):
+                get_document_file(c, owner, business, doc.id)
+        delete_document(engine, owner, business, doc.id)
+        assert not path.exists()
+
+    @pytest.mark.parametrize("stage", ["inspect_pdf_file", "_write_pdf_atomically"])
+    def test_real_process_death_is_retryable(self, workspace, tmp_path, stage):
+        import subprocess
+        import sys
+        engine, _, owner, _, business, _ = workspace
+        source = tmp_path / "source.pdf"
+        source.write_bytes(build_minimal_pdf(["Revenue 120000"]))
+        script = """
+import io, os, sys
+from uuid import UUID
+import app.documents as service
+from app.database import get_engine
+def crash(*args):
+    os._exit(23)
+setattr(service, sys.argv[4], crash)
+service.upload_and_process_document(get_engine(), UUID(sys.argv[1]), UUID(sys.argv[2]), "crash.pdf", "application/pdf", io.BytesIO(open(sys.argv[3], "rb").read()))
+"""
+        result = subprocess.run([sys.executable, "-c", script, str(owner), str(business), str(source), stage], timeout=60, capture_output=True)
+        assert result.returncode == 23
+        with engine.begin() as c:
+            doc = list_documents(c, owner, business)[0]
+        assert doc.status == "failed" and doc.error_code == "interrupted_job"
+        if stage == "inspect_pdf_file":
+            assert document_file_path(owner, business, doc.id).exists()
+            assert retry_document_processing(engine, owner, business, doc.id).status == "ready"
+        else:
+            assert not document_file_path(owner, business, doc.id).exists()
+            assert retry_document_processing(engine, owner, business, doc.id).error_code == "missing_storage_file"
+        delete_document(engine, owner, business, doc.id)
+
+    def test_database_active_job_index(self, workspace):
+        engine, _, owner, _, business, second = workspace
+        values = dict(owner_id=owner, filename="job.pdf", sha256="a" * 64, byte_size=10, status="processing")
+        with engine.begin() as c:
+            c.execute(documents.insert().values(id=uuid4(), business_id=business, **values))
+        with pytest.raises(IntegrityError), engine.begin() as c:
+            c.execute(documents.insert().values(id=uuid4(), business_id=second, **values))
+
+    def test_http_owner_isolation_and_file_removal(self, env):
         engine, storage_dir, request_model, created_owners = env
-        owner_a = uuid4()
-        owner_b = uuid4()
-        created_owners.extend([owner_a, owner_b])
-
-        with engine.begin() as connection:
-            connection.execute(owners.insert().values(id=owner_a))
-            connection.execute(owners.insert().values(id=owner_b))
-            biz_a1 = save_business(connection, owner_a, request_model)
-            biz_a2 = save_business(connection, owner_a, request_model)
-            biz_b1 = save_business(connection, owner_b, request_model)
-
-        # 1. Rejected uploads (wrong type, scanned-only, >50 pages, >20 MB) leave zero DB rows and zero files on disk.
-        scanned_pdf = build_minimal_pdf([""])
-        fifty_one_page_pdf = build_minimal_pdf([f"FY24 page {i}" for i in range(51)])
-        for filename, ctype, payload, expected_code in [
-            ("notes.txt", "text/plain", b"plain text", "unsupported_file_type"),
-            ("scanned.pdf", "application/pdf", scanned_pdf, "scanned_only_pdf"),
-            ("huge_pages.pdf", "application/pdf", fifty_one_page_pdf, "too_many_pages"),
-        ]:
-            with pytest.raises(DocumentRejectError) as exc_info:
-                with engine.begin() as connection:
-                    upload_and_process_document(
-                        connection,
-                        owner_a,
-                        biz_a1,
-                        filename,
-                        ctype,
-                        io.BytesIO(payload),
-                    )
-            assert exc_info.value.code == expected_code
-
-        with engine.connect() as connection:
-            count = connection.execute(
-                select(func.count()).select_from(documents)
-            ).scalar_one()
-            assert count == 0
-        assert not storage_dir.exists() or list(storage_dir.rglob("*")) == []
-
-        # 2. Valid digital PDF upload succeeds, stores file in owner/business path, and populatesWorkspaceResponse.documents.
-        valid_pdf = build_minimal_pdf(
-            ["Aster Components Standalone Balance Sheet FY 2024-25", "Revenue 1,85,00,000"]
-        )
-        with engine.begin() as connection:
-            doc = upload_and_process_document(
-                connection,
-                owner_a,
-                biz_a1,
-                "Aster_FY24_25.pdf",
-                "application/pdf",
-                io.BytesIO(valid_pdf),
-            )
-            ws = load_workspace(connection, owner_a, biz_a1)
-
-        assert doc.status == "ready"
-        assert doc.page_count == 2
-        assert doc.extracted_char_count and doc.extracted_char_count > 30
-        assert len(ws.documents) == 1
-        assert ws.documents[0].id == doc.id
-        stored_file = document_file_path(owner_a, biz_a1, doc.id)
-        assert stored_file.is_file()
-        assert stored_file.read_bytes() == valid_pdf
-
-        # 3. Simulated transaction rollback after file write cleans up the written file (no orphan file on disk).
-        before_files = set(storage_dir.rglob("*.pdf"))
-        with pytest.raises(RuntimeError, match="simulated db crash"):
-            with engine.begin() as connection:
-                uploaded_temp = upload_and_process_document(
-                    connection,
-                    owner_a,
-                    biz_a1,
-                    "Rollback.pdf",
-                    "application/pdf",
-                    io.BytesIO(valid_pdf),
-                )
-                # Ensure if an outer error happens or if upload_and_process_document itself fails mid-DB, no orphan remains:
-                document_file_path(owner_a, biz_a1, uploaded_temp.id).unlink(missing_ok=True)
-                raise RuntimeError("simulated db crash")
-        after_files = set(storage_dir.rglob("*.pdf"))
-        assert after_files == before_files
-
-        # 4. Enforce one active job at a time (both in-memory active lock and DB partial unique index).
-        active_id = uuid4()
-        _acquire_active_job(owner_a, active_id)
-        try:
-            with pytest.raises(DocumentRejectError) as exc_info:
-                with engine.begin() as connection:
-                    upload_and_process_document(
-                        connection,
-                        owner_a,
-                        biz_a1,
-                        "Concurrent.pdf",
-                        "application/pdf",
-                        io.BytesIO(valid_pdf),
-                    )
-            assert exc_info.value.status_code == 409
-            assert exc_info.value.code == "active_job_exists"
-        finally:
-            _release_active_job(owner_a, active_id)
-
-        # Verify DB partial unique index directly rejects two 'processing' rows for the same owner even across businesses.
-        proc_1 = uuid4()
-        proc_2 = uuid4()
-        with engine.begin() as connection:
-            connection.execute(
-                documents.insert().values(
-                    id=proc_1,
-                    business_id=biz_a1,
-                    owner_id=owner_a,
-                    filename="job1.pdf",
-                    sha256="a" * 64,
-                    byte_size=len(valid_pdf),
-                    status="processing",
-                )
-            )
-        with pytest.raises(IntegrityError), engine.begin() as connection:
-            connection.execute(
-                documents.insert().values(
-                    id=proc_2,
-                    business_id=biz_a2,
-                    owner_id=owner_a,
-                    filename="job2.pdf",
-                    sha256="b" * 64,
-                    byte_size=len(valid_pdf),
-                    status="processing",
-                )
-            )
-
-        # 5. Interrupted jobs never appear complete: leftover 'processing' row with no active worker is reconciled to 'failed' (interrupted_job) and can be retried to 'ready'.
-        proc_1_path = document_file_path(owner_a, biz_a1, proc_1)
-        proc_1_path.parent.mkdir(parents=True, exist_ok=True)
-        proc_1_path.write_bytes(valid_pdf)
-
-        with engine.begin() as connection:
-            ws_reconciled = load_workspace(connection, owner_a, biz_a1)
-        by_id = {d.id: d for d in ws_reconciled.documents}
-        assert by_id[proc_1].status == "failed"
-        assert by_id[proc_1].error_code == "interrupted_job"
-        assert by_id[proc_1].page_count is None
-
-        with engine.begin() as connection:
-            retried = retry_document_processing(connection, owner_a, biz_a1, proc_1)
-        assert retried.status == "ready"
-        assert retried.page_count == 2
-        assert retried.error_code is None
-        assert retried.error_message is None
-
+        valid_pdf = build_minimal_pdf(["Revenue 120000"])
         # 6. HTTP API & strict owner / cross-business isolation.
         client = TestClient(app)
         email_a = f"pdf-owner-a-{uuid4().hex[:8]}@example.com"
@@ -378,6 +413,13 @@ class TestProtectedPdfPersistence:
         )
         assert upload_res.status_code == 201
         api_doc_id = upload_res.json()["id"]
+        anon = TestClient(app)
+        base = f"/api/businesses/{api_biz_a}/documents"
+        assert anon.get(base).status_code == 401
+        assert anon.get(f"{base}/{api_doc_id}/file").status_code == 401
+        assert anon.post(f"{base}/{api_doc_id}/retry").status_code == 401
+        assert anon.delete(f"{base}/{api_doc_id}").status_code == 401
+        assert anon.post(base, files={"file": ("test.pdf", valid_pdf, "application/pdf")}).status_code == 401
         assert upload_res.json()["status"] == "ready"
 
         file_res = client.get(
@@ -387,7 +429,7 @@ class TestProtectedPdfPersistence:
         assert file_res.content == valid_pdf
         assert file_res.headers["x-content-type-options"] == "nosniff"
 
-        # Cross-owner access returns 404 for list, upload, retry, file download, and delete.
+        # Cross-owner access returns 404 on each protected document path.
         client_b = TestClient(app)
         reg_b = client_b.post(
             "/api/auth/register",
@@ -395,6 +437,7 @@ class TestProtectedPdfPersistence:
         )
         assert reg_b.status_code == 201
         created_owners.append(reg_b.json()["owner_id"])
+        assert client_b.post(f"/api/businesses/{api_biz_a}/documents", files={"file": ("test.pdf", valid_pdf, "application/pdf")}).status_code == 404
 
         assert (
             client_b.get(f"/api/businesses/{api_biz_a}/documents").status_code == 404

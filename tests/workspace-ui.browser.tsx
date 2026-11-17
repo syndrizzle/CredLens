@@ -98,8 +98,9 @@ async function run() {
   await chooseWorkspace("Business a");
   check(name().matches(":disabled"), "Name locked during load");
   const select = document.querySelector<HTMLButtonElement>('button[role="combobox"]')!;
+  const requestsBeforeSelect = calls.length;
   await click(select);
-  check(!document.querySelector('[role="option"]'), "Pending load prevents another selection");
+  check(select.matches(":disabled") && calls.length === requestsBeforeSelect, "Pending load prevents another selection");
   await act(async () => pending.resolve(Response.json({
     ...workspace("a", "Business a"),
     documents: [{
@@ -143,6 +144,20 @@ async function run() {
   await click(button("Analyse figures"));
   check(name().matches(":disabled"), "Editor locked during saved analysis");
   await act(async () => analysisPending.resolve(Response.json(workspace("a", "Business a"))));
+  await rename("Unsaved PDF review draft");
+  docPending = deferred();
+  await click(button("Refresh document status"));
+  check(name().matches(":disabled"), "Refresh locks competing actions");
+  await act(async () => docPending.resolve(Response.json([{
+    id: "doc-1", business_id: "a", filename: "Aster_FY24.pdf", sha256: "a".repeat(64),
+    byte_size: 16384, page_count: null, extracted_char_count: null, status: "failed",
+    error_code: "deletion_pending", error_message: "Removal is pending. Use Remove again to finish.",
+    created_at: "2026-11-17T10:00:00Z", updated_at: "2026-11-17T10:00:05Z",
+  }])));
+  check(name().value === "Unsaved PDF review draft", "Refreshing document status preserves unsaved financial draft");
+  check(text().includes("Removal is pending") && !text().includes("Retry processing") && !text().includes("View PDF"), "Pending removal exposes Remove without retry or file access");
+
+
   await rename("Edited after analysis");
   pending = deferred();
   analysisPending = deferred();

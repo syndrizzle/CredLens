@@ -17,6 +17,7 @@ from app.auth import (
     revoke_session,
 )
 from app.database import check_database, get_engine
+from app.document_ingress import DocumentUploadGuard
 from app.documents import (
     DocumentRejectError,
     delete_document,
@@ -46,6 +47,7 @@ from app.schemas import (
 )
 
 app = FastAPI(title="CredLens", version="0.1.0")
+app.add_middleware(DocumentUploadGuard)
 
 
 @contextmanager
@@ -246,59 +248,35 @@ def get_business_documents(
             raise HTTPException(status_code=404, detail=str(exc)) from None
 
 
-@app.post(
-    "/api/businesses/{business_id}/documents",
-    response_model=DocumentSummary,
-    status_code=201,
-)
-def upload_business_document(
-    business_id: UUID,
-    request: Request,
-    file: UploadFile = File(...),
-) -> DocumentSummary:
+@contextmanager
+def document_errors():
+    try:
+        yield
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+    except DocumentRejectError as exc:
+        raise HTTPException(status_code=exc.status_code, detail={"code": exc.code, "message": exc.message}) from None
+    except (RuntimeError, SQLAlchemyError):
+        raise HTTPException(status_code=503, detail="Document service unavailable; refresh document status before retrying.") from None
+
+
+@app.post("/api/businesses/{business_id}/documents", response_model=DocumentSummary, status_code=201)
+def upload_business_document(business_id: UUID, request: Request, file: UploadFile = File(...)) -> DocumentSummary:
     try:
         with db_transaction() as connection:
             session = require_session(connection, request)
-            try:
-                return upload_and_process_document(
-                    connection,
-                    session.owner_id,
-                    business_id,
-                    file.filename,
-                    file.content_type,
-                    file.file,
-                )
-            except LookupError as exc:
-                raise HTTPException(status_code=404, detail=str(exc)) from None
-            except DocumentRejectError as exc:
-                raise HTTPException(
-                    status_code=exc.status_code,
-                    detail={"code": exc.code, "message": exc.message},
-                ) from None
+        with document_errors():
+            return upload_and_process_document(get_engine(), session.owner_id, business_id, file.filename, file.content_type, file.file)
     finally:
         file.file.close()
 
 
-@app.post(
-    "/api/businesses/{business_id}/documents/{document_id}/retry",
-    response_model=DocumentSummary,
-)
-def retry_business_document(
-    business_id: UUID, document_id: UUID, request: Request
-) -> DocumentSummary:
+@app.post("/api/businesses/{business_id}/documents/{document_id}/retry", response_model=DocumentSummary)
+def retry_business_document(business_id: UUID, document_id: UUID, request: Request) -> DocumentSummary:
     with db_transaction() as connection:
         session = require_session(connection, request)
-        try:
-            return retry_document_processing(
-                connection, session.owner_id, business_id, document_id
-            )
-        except LookupError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from None
-        except DocumentRejectError as exc:
-            raise HTTPException(
-                status_code=exc.status_code,
-                detail={"code": exc.code, "message": exc.message},
-            ) from None
+    with document_errors():
+        return retry_document_processing(get_engine(), session.owner_id, business_id, document_id)
 
 
 @app.get("/api/businesses/{business_id}/documents/{document_id}/file")
@@ -327,18 +305,9 @@ def download_business_document(
 
 
 @app.delete("/api/businesses/{business_id}/documents/{document_id}")
-def remove_business_document(
-    business_id: UUID, document_id: UUID, request: Request
-) -> dict[str, str]:
+def remove_business_document(business_id: UUID, document_id: UUID, request: Request) -> dict[str, str]:
     with db_transaction() as connection:
         session = require_session(connection, request)
-        try:
-            delete_document(connection, session.owner_id, business_id, document_id)
-            return {"status": "deleted"}
-        except LookupError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from None
-        except DocumentRejectError as exc:
-            raise HTTPException(
-                status_code=exc.status_code,
-                detail={"code": exc.code, "message": exc.message},
-            ) from None
+    with document_errors():
+        delete_document(get_engine(), session.owner_id, business_id, document_id)
+    return {"status": "deleted"}

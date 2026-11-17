@@ -165,6 +165,17 @@ export async function analyseWorkspace(businessId: string): Promise<WorkspaceRes
   return parseWorkspace(response);
 }
 
+export async function fetchDocuments(businessId: string): Promise<DocumentSummary[]> {
+  const response = await fetch(`/api/businesses/${encodeURIComponent(businessId)}/documents`, {
+    credentials: "same-origin", signal: AbortSignal.timeout(30000),
+  });
+  if (response.status === 401) throw new Error("Your session expired. Sign in again.");
+  if (!response.ok) throw new Error("Could not refresh document status.");
+  const body: unknown = await response.json();
+  if (!Array.isArray(body) || !body.every(validDocument)) throw new Error("The server returned invalid document status.");
+  return body;
+}
+
 export async function uploadDocument(businessId: string, file: File): Promise<DocumentSummary> {
   const formData = new FormData();
   formData.append("file", file);

@@ -282,6 +282,7 @@ test("updateWorkspace sends expected_revision, handles 409 conflicts, validates 
 test("document client uploads, retries, deletes, surfaces validation errors, and guards document payloads", async () => {
   const {
     deleteDocument,
+    fetchDocuments,
     fetchWorkspace,
     retryDocument,
     uploadDocument,
@@ -307,6 +308,15 @@ test("document client uploads, retries, deletes, surfaces validation errors, and
   const file = new File(["%PDF-1.4 sample"], "FY24_Statement.pdf", { type: "application/pdf" });
   const uploaded = await uploadDocument("11111111-1111-1111-1111-111111111111", file);
   expect(uploaded).toEqual(validDoc);
+
+  const failed = { ...validDoc, status: "failed", page_count: null, extracted_char_count: null, error_code: "parser_timeout", error_message: "Processing timed out." };
+  respond(failed, 201);
+  expect((await uploadDocument(validDoc.business_id, file)).status).toBe("failed");
+  respond([failed]);
+  expect(await fetchDocuments(validDoc.business_id)).toEqual([failed]);
+  respond([{ ...failed, status: "invalid" }]);
+  await expect(fetchDocuments(validDoc.business_id)).rejects.toThrow("invalid document status");
+
 
   respond({ detail: { code: "scanned_only_pdf", message: "Scanned or image-only PDFs without selectable digital text are not supported." } }, 422);
   await expect(uploadDocument("11111111-1111-1111-1111-111111111111", file)).rejects.toThrow("Scanned or image-only PDFs");

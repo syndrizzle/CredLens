@@ -2,6 +2,7 @@ import { AnalysisResults } from "../analysis/AnalysisResults";
 import {
   analyseWorkspace,
   deleteDocument,
+  fetchDocuments,
   fetchBusinesses,
   fetchSession,
   fetchWorkspace,
@@ -283,6 +284,23 @@ function ManualEntry() {
     }
   }
 
+  async function handleRefreshDocuments() {
+    if (actionPending.current || !activeWorkspace) return;
+    actionPending.current = true;
+    setDocumentBusy(true);
+    setDocumentError(null);
+    try {
+      const documents = await fetchDocuments(activeWorkspace.id);
+      setActiveWorkspace((current) => current ? { ...current, documents } : current);
+      setNotice("Document status refreshed. Your draft entries are kept.");
+    } catch (error) {
+      setDocumentError(error instanceof Error ? error.message : "Could not refresh document status.");
+    } finally {
+      actionPending.current = false;
+      setDocumentBusy(false);
+    }
+  }
+
   async function handleUploadDocument() {
     if (actionPending.current || !activeWorkspace || !selectedPdf) return;
     actionPending.current = true;
@@ -303,7 +321,9 @@ function ManualEntry() {
       );
       setSelectedPdf(null);
       if (fileInputRef.current) fileInputRef.current.value = "";
-      setNotice(`Uploaded and processed "${uploaded.filename}".`);
+      setNotice(uploaded.status === "ready"
+        ? `Uploaded and processed "${uploaded.filename}".`
+        : `Saved "${uploaded.filename}" with status: ${uploaded.status}. Check its message below.`);
     } catch (error) {
       setDocumentError(
         error instanceof Error ? error.message : "Could not upload PDF.",
@@ -834,13 +854,16 @@ function ManualEntry() {
                 >
                   {documentBusy ? "Processing PDF…" : "Upload PDF"}
                 </Button>
+                <Button type="button" variant="outline" disabled={actionsDisabled} onClick={() => void handleRefreshDocuments()}>
+                  Refresh document status
+                </Button>
               </div>
               {documentError ? (
                 <Alert variant="destructive">
                   <HugeiconsIcon icon={Alert02Icon} />
                   <AlertTitle>PDF upload or processing failed</AlertTitle>
                   <AlertDescription className="col-start-2">
-                    {documentError}
+                    {documentError} Refresh document status before retrying an interrupted request.
                   </AlertDescription>
                 </Alert>
               ) : null}
@@ -896,7 +919,7 @@ function ManualEntry() {
                             View PDF
                           </a>
                         ) : null}
-                        {doc.status === "failed" ? (
+                        {doc.status === "failed" && doc.error_code !== "deletion_pending" ? (
                           <Button
                             type="button"
                             variant="outline"
