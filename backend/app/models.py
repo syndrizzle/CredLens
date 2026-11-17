@@ -4,6 +4,7 @@ from sqlalchemy import (
     Column,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     MetaData,
     Numeric,
@@ -13,6 +14,7 @@ from sqlalchemy import (
     UniqueConstraint,
     Uuid,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 
@@ -147,4 +149,74 @@ analysis_runs = Table(
     Column("results", JSONB, nullable=False),
     created_at(),
     CheckConstraint("input_revision > 0", name="run_revision"),
+)
+documents = Table(
+    "documents",
+    metadata,
+    Column("id", Uuid, primary_key=True),
+    Column(
+        "business_id",
+        Uuid,
+        ForeignKey("businesses.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    ),
+    Column(
+        "owner_id",
+        Uuid,
+        ForeignKey("owners.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    ),
+    Column("filename", String(255), nullable=False),
+    Column("sha256", String(64), nullable=False),
+    Column("byte_size", Integer, nullable=False),
+    Column("page_count", Integer),
+    Column("extracted_char_count", Integer),
+    Column("status", String(20), nullable=False),
+    Column("error_code", String(64)),
+    Column("error_message", Text),
+    created_at(),
+    Column(
+        "updated_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    ),
+    CheckConstraint(
+        "length(btrim(filename)) > 0 AND lower(filename) LIKE '%.pdf'",
+        name="document_filename",
+    ),
+    CheckConstraint("length(sha256) = 64", name="document_sha256"),
+    CheckConstraint(
+        "byte_size BETWEEN 1 AND 20971520",
+        name="document_byte_size",
+    ),
+    CheckConstraint(
+        "page_count IS NULL OR page_count BETWEEN 1 AND 50",
+        name="document_page_count",
+    ),
+    CheckConstraint(
+        "extracted_char_count IS NULL OR extracted_char_count >= 0",
+        name="document_extracted_chars",
+    ),
+    CheckConstraint(
+        "status IN ('processing', 'ready', 'failed')",
+        name="document_status",
+    ),
+    CheckConstraint(
+        "(status = 'failed' AND error_code IS NOT NULL AND error_message IS NOT NULL) "
+        "OR (status IN ('processing', 'ready') AND error_code IS NULL AND error_message IS NULL)",
+        name="document_status_error",
+    ),
+    CheckConstraint(
+        "status != 'ready' OR (page_count BETWEEN 1 AND 50 AND extracted_char_count > 0)",
+        name="document_ready_stats",
+    ),
+)
+Index(
+    "documents_one_active_job_idx",
+    documents.c.owner_id,
+    unique=True,
+    postgresql_where=text("status = 'processing'"),
 )

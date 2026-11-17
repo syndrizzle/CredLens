@@ -1,16 +1,20 @@
 import { AnalysisResults } from "../analysis/AnalysisResults";
 import {
   analyseWorkspace,
+  deleteDocument,
   fetchBusinesses,
   fetchSession,
   fetchWorkspace,
+  retryDocument,
   saveWorkspace,
   signOut,
   submitCredentials,
   updateWorkspace,
+  uploadDocument,
   type AnalysisResponse,
   type AnalysisRunSummary,
   type BusinessSummary,
+  type DocumentSummary,
   type SessionUser,
   type WorkspaceResponse,
 } from "../analysis/api";
@@ -98,12 +102,17 @@ function ManualEntry() {
     form: FormDraft;
     analysis: AnalysisResponse | null;
     runs: AnalysisRunSummary[];
+    documents: DocumentSummary[];
   } | null>(null);
   const [workspaceBusy, setWorkspaceBusy] = useState(false);
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
+  const [documentBusy, setDocumentBusy] = useState(false);
+  const [documentError, setDocumentError] = useState<string | null>(null);
+  const [selectedPdf, setSelectedPdf] = useState<File | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [replacement, setReplacement] = useState<Replacement | null>(null);
   const actionPending = useRef(true);
-  const actionsDisabled = checkingSession || authBusy || workspaceBusy;
+  const actionsDisabled = checkingSession || authBusy || workspaceBusy || documentBusy;
 
   const analysis = useAnalysis(form);
   const periods = sortedPeriods(form.periods);
@@ -143,13 +152,14 @@ function ManualEntry() {
     setReplacement(null);
     const nextForm = formFromRequest(workspace.request);
     setForm(nextForm);
-    setActiveWorkspace({
+    setActiveWorkspace((current) => ({
       id: workspace.business_id,
       revision: workspace.input_revision,
       form: nextForm,
       analysis: workspace.latest_analysis,
       runs: workspace.runs ?? [],
-    });
+      documents: workspace.documents ?? (current?.id === workspace.business_id ? current.documents : []),
+    }));
     setBusinesses((current) => {
       const summary: BusinessSummary = {
         id: workspace.business_id,
@@ -164,6 +174,7 @@ function ManualEntry() {
     setShowErrors(false);
     setConfirmExample(false);
     setWorkspaceError(null);
+    setDocumentError(null);
     setNotice(message);
   }
 
@@ -195,12 +206,16 @@ function ManualEntry() {
     actionPending.current = true;
     setAuthBusy(true);
     setWorkspaceError(null);
+    setDocumentError(null);
     try {
       await signOut();
       setSession(null);
       setBusinesses([]);
       setActiveWorkspace(null);
       setWorkspaceError(null);
+      setDocumentError(null);
+      setSelectedPdf(null);
+      if (fileInputRef.current) fileInputRef.current.value = "";
       setAuthError(null);
       setForm(createEmptyForm());
       setReplacement(null);
@@ -218,6 +233,7 @@ function ManualEntry() {
     actionPending.current = true;
     setWorkspaceBusy(true);
     setWorkspaceError(null);
+    setDocumentError(null);
     try {
       const workspace = await fetchWorkspace(businessId);
       applyWorkspace(
@@ -267,13 +283,105 @@ function ManualEntry() {
     }
   }
 
+  async function handleUploadDocument() {
+    if (actionPending.current || !activeWorkspace || !selectedPdf) return;
+    actionPending.current = true;
+    setDocumentBusy(true);
+    setDocumentError(null);
+    try {
+      const uploaded = await uploadDocument(activeWorkspace.id, selectedPdf);
+      setActiveWorkspace((current) =>
+        current
+          ? {
+              ...current,
+              documents: [
+                uploaded,
+                ...current.documents.filter((item) => item.id !== uploaded.id),
+              ],
+            }
+          : current,
+      );
+      setSelectedPdf(null);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      setNotice(`Uploaded and processed "${uploaded.filename}".`);
+    } catch (error) {
+      setDocumentError(
+        error instanceof Error ? error.message : "Could not upload PDF.",
+      );
+    } finally {
+      actionPending.current = false;
+      setDocumentBusy(false);
+    }
+  }
+
+  async function handleRetryDocument(documentId: string) {
+    if (actionPending.current || !activeWorkspace) return;
+    actionPending.current = true;
+    setDocumentBusy(true);
+    setDocumentError(null);
+    try {
+      const updated = await retryDocument(activeWorkspace.id, documentId);
+      setActiveWorkspace((current) =>
+        current
+          ? {
+              ...current,
+              documents: current.documents.map((item) =>
+                item.id === updated.id ? updated : item,
+              ),
+            }
+          : current,
+      );
+      setNotice(
+        updated.status === "ready"
+          ? `Retried and processed "${updated.filename}".`
+          : `Retry finished for "${updated.filename}".`,
+      );
+    } catch (error) {
+      setDocumentError(
+        error instanceof Error ? error.message : "Could not retry PDF processing.",
+      );
+    } finally {
+      actionPending.current = false;
+      setDocumentBusy(false);
+    }
+  }
+
+  async function handleDeleteDocument(documentId: string, filename: string) {
+    if (actionPending.current || !activeWorkspace) return;
+    actionPending.current = true;
+    setDocumentBusy(true);
+    setDocumentError(null);
+    try {
+      await deleteDocument(activeWorkspace.id, documentId);
+      setActiveWorkspace((current) =>
+        current
+          ? {
+              ...current,
+              documents: current.documents.filter((item) => item.id !== documentId),
+            }
+          : current,
+      );
+      setNotice(`Removed "${filename}" from workspace.`);
+    } catch (error) {
+      setDocumentError(
+        error instanceof Error ? error.message : "Could not remove document.",
+      );
+    } finally {
+      actionPending.current = false;
+      setDocumentBusy(false);
+    }
+  }
+
   function startNewWorkspace() {
     setReplacement(null);
     setForm(createEmptyForm());
     setActiveWorkspace(null);
+    setSelectedPdf(null);
+    if (fileInputRef.current) fileInputRef.current.value = "";
     setShowErrors(false);
     setConfirmExample(false);
     setWorkspaceError(null);
+    setDocumentError(null);
     setNotice("Started a new unsaved workspace draft.");
   }
 
@@ -692,6 +800,134 @@ function ManualEntry() {
             )}
           </CardContent>
         </Card>
+
+        {session && activeWorkspace ? (
+          <Card>
+            <CardHeader>
+              <CardTitle>Source PDF documents</CardTitle>
+              <CardDescription>
+                Upload digital financial statement PDFs for &ldquo;{activeWorkspace.form.businessName}&rdquo;. Maximum 20 MB and 50 pages per PDF; one processing job runs at a time. Scanned or image-only PDFs are rejected.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex flex-wrap items-end gap-3">
+                <div className="min-w-64 flex-1 space-y-1.5">
+                  <Label htmlFor="pdf-upload-input">Financial statement PDF</Label>
+                  <Input
+                    ref={fileInputRef}
+                    id="pdf-upload-input"
+                    type="file"
+                    accept=".pdf,application/pdf"
+                    disabled={actionsDisabled}
+                    onChange={(event) => {
+                      const nextFile = event.target.files?.[0] ?? null;
+                      setSelectedPdf(nextFile);
+                      setDocumentError(null);
+                    }}
+                  />
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => void handleUploadDocument()}
+                  disabled={actionsDisabled || !selectedPdf}
+                >
+                  {documentBusy ? "Processing PDF…" : "Upload PDF"}
+                </Button>
+              </div>
+              {documentError ? (
+                <Alert variant="destructive">
+                  <HugeiconsIcon icon={Alert02Icon} />
+                  <AlertTitle>PDF upload or processing failed</AlertTitle>
+                  <AlertDescription className="col-start-2">
+                    {documentError}
+                  </AlertDescription>
+                </Alert>
+              ) : null}
+              {activeWorkspace.documents.length > 0 ? (
+                <ul className="divide-y divide-border rounded-lg border border-border" aria-label="Uploaded PDF documents">
+                  {activeWorkspace.documents.map((doc) => (
+                    <li
+                      key={doc.id}
+                      className="flex flex-wrap items-center justify-between gap-3 p-3 text-sm"
+                    >
+                      <div className="space-y-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-medium">{doc.filename}</span>
+                          <Badge
+                            variant={
+                              doc.status === "ready"
+                                ? "secondary"
+                                : doc.status === "failed"
+                                  ? "destructive"
+                                  : "outline"
+                            }
+                          >
+                            {doc.status === "ready"
+                              ? "Ready"
+                              : doc.status === "failed"
+                                ? "Failed"
+                                : "Processing"}
+                          </Badge>
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          {Math.max(1, Math.round(doc.byte_size / 1024))} KB
+                          {doc.page_count !== null
+                            ? ` · ${doc.page_count} ${doc.page_count === 1 ? "page" : "pages"}`
+                            : ""}
+                          {doc.extracted_char_count !== null
+                            ? ` · ${doc.extracted_char_count} digital chars`
+                            : ""}
+                        </p>
+                        {doc.error_message ? (
+                          <p className="text-xs text-destructive">
+                            {doc.error_message}
+                          </p>
+                        ) : null}
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        {doc.status === "ready" ? (
+                          <a
+                            href={`/api/businesses/${encodeURIComponent(activeWorkspace.id)}/documents/${encodeURIComponent(doc.id)}/file`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-xs font-medium text-primary underline-offset-4 hover:underline"
+                          >
+                            View PDF
+                          </a>
+                        ) : null}
+                        {doc.status === "failed" ? (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            disabled={actionsDisabled}
+                            onClick={() => void handleRetryDocument(doc.id)}
+                          >
+                            Retry processing
+                          </Button>
+                        ) : null}
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          disabled={actionsDisabled}
+                          onClick={() => void handleDeleteDocument(doc.id, doc.filename)}
+                        >
+                          Remove
+                        </Button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  No PDFs uploaded for this workspace yet.
+                </p>
+              )}
+            </CardContent>
+          </Card>
+        ) : null}
 
         {!session ? (
           <Alert role="status">

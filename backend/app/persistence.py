@@ -7,6 +7,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Connection
 
 from app.analysis import MULTIPLIERS, analyse
+from app.documents import list_documents
 from app.models import analysis_runs, businesses, figures, periods, revisions
 from app.schemas import (
     AnalysisRequest,
@@ -406,4 +407,5 @@ def load_workspace(
         latest_run_id=current_run["id"] if current_run else None,
         latest_analysis=latest,
         runs=runs,
+        documents=list_documents(connection, owner_id, business_id),
     )

@@ -37,6 +37,7 @@ const workspace = (id: string, businessName: string) => ({
 });
 let pending = deferred();
 let analysisPending = deferred();
+let docPending = deferred();
 const restoration = deferred();
 let logoutFailure: "http" | "network" | null = "http";
 const calls: string[] = [];
@@ -51,6 +52,7 @@ globalThis.fetch = async (input, options) => {
   if (path === "/api/businesses" && options?.method !== "POST") {
     return Response.json(["a", "b"].map(id => ({ id, business_name: `Business ${id}`, input_revision: 1 })));
   }
+  if (path.includes("/documents")) return docPending.promise;
   return path.endsWith("/analysis") ? analysisPending.promise : pending.promise;
 };
 async function chooseWorkspace(label: string) {
@@ -98,8 +100,44 @@ async function run() {
   const select = document.querySelector<HTMLButtonElement>('button[role="combobox"]')!;
   await click(select);
   check(!document.querySelector('[role="option"]'), "Pending load prevents another selection");
-  await act(async () => pending.resolve(Response.json(workspace("a", "Business a"))));
+  await act(async () => pending.resolve(Response.json({
+    ...workspace("a", "Business a"),
+    documents: [{
+      id: "doc-1",
+      business_id: "a",
+      filename: "Aster_FY24.pdf",
+      sha256: "a".repeat(64),
+      byte_size: 16384,
+      page_count: null,
+      extracted_char_count: null,
+      status: "failed",
+      error_code: "interrupted_job",
+      error_message: "Processing was interrupted before completion. Retry processing to continue.",
+      created_at: "2026-11-17T10:00:00Z",
+      updated_at: "2026-11-17T10:00:01Z",
+    }],
+  })));
   check(name().value === "Business a", "Load applies selected workspace");
+  check(text().includes("Source PDF documents") && text().includes("Aster_FY24.pdf") && text().includes("Failed"), "Loaded workspace renders failed/interrupted PDF document");
+
+  docPending = deferred();
+  await click(button("Retry processing"));
+  check(name().matches(":disabled"), "Editor locked during PDF retry processing");
+  await act(async () => docPending.resolve(Response.json({
+    id: "doc-1",
+    business_id: "a",
+    filename: "Aster_FY24.pdf",
+    sha256: "a".repeat(64),
+    byte_size: 16384,
+    page_count: 3,
+    extracted_char_count: 980,
+    status: "ready",
+    error_code: null,
+    error_message: null,
+    created_at: "2026-11-17T10:00:00Z",
+    updated_at: "2026-11-17T10:00:05Z",
+  })));
+  check(text().includes("Ready") && text().includes("3 pages") && text().includes("View PDF"), "Retried PDF transitions to Ready with page count and View PDF link");
 
   analysisPending = deferred();
   await click(button("Analyse figures"));

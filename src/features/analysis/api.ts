@@ -52,11 +52,19 @@ export type AnalysisRunSummary = {
   run_id: string; input_revision: number; rule_version: string;
   action_version?: string | null; superseded: boolean; created_at: string;
 };
+export type DocumentSummary = {
+  id: string; business_id: string; filename: string; sha256: string;
+  byte_size: number; page_count: number | null; extracted_char_count: number | null;
+  status: "processing" | "ready" | "failed";
+  error_code: string | null; error_message: string | null;
+  created_at: string; updated_at: string;
+};
 export type WorkspaceResponse = {
   business_id: string; input_revision: number;
   request: RequestPayload;
   latest_run_id: string | null; latest_analysis: AnalysisResponse | null;
   runs?: AnalysisRunSummary[];
+  documents?: DocumentSummary[];
 };
 
 export function analysisRequest(form: FormDraft): RequestPayload {
@@ -157,6 +165,66 @@ export async function analyseWorkspace(businessId: string): Promise<WorkspaceRes
   return parseWorkspace(response);
 }
 
+export async function uploadDocument(businessId: string, file: File): Promise<DocumentSummary> {
+  const formData = new FormData();
+  formData.append("file", file);
+  const response = await fetch(`/api/businesses/${encodeURIComponent(businessId)}/documents`, {
+    method: "POST", credentials: "same-origin", signal: AbortSignal.timeout(30000),
+    body: formData,
+  });
+  return parseDocumentResponse(response);
+}
+
+export async function retryDocument(businessId: string, documentId: string): Promise<DocumentSummary> {
+  const response = await fetch(`/api/businesses/${encodeURIComponent(businessId)}/documents/${encodeURIComponent(documentId)}/retry`, {
+    method: "POST", credentials: "same-origin", signal: AbortSignal.timeout(30000),
+  });
+  return parseDocumentResponse(response);
+}
+
+export async function deleteDocument(businessId: string, documentId: string): Promise<void> {
+  const response = await fetch(`/api/businesses/${encodeURIComponent(businessId)}/documents/${encodeURIComponent(documentId)}`, {
+    method: "DELETE", credentials: "same-origin", signal: AbortSignal.timeout(30000),
+  });
+  if (response.status === 401) throw new Error("Your session expired. Sign in again.");
+  if (response.status === 404) throw new Error("Document not found.");
+  if (!response.ok) {
+    const msg = await extractDocumentError(response);
+    throw new Error(msg ?? "Could not remove document.");
+  }
+}
+
+async function extractDocumentError(response: Response): Promise<string | null> {
+  try {
+    const body: unknown = await response.json();
+    if (record(body) && record(body.detail) && typeof body.detail.message === "string") {
+      return body.detail.message;
+    }
+    if (record(body) && typeof body.detail === "string") {
+      return body.detail;
+    }
+  } catch {
+    // ignore non-json error body
+  }
+  return null;
+}
+
+async function parseDocumentResponse(response: Response): Promise<DocumentSummary> {
+  if (response.status === 401) throw new Error("Your session expired. Sign in again.");
+  if (response.status === 404) throw new Error("Workspace or document not found.");
+  if (!response.ok) {
+    const msg = await extractDocumentError(response);
+    if (msg) throw new Error(msg);
+    if (response.status === 413) throw new Error("PDF exceeds the 20 MB maximum file size limit.");
+    if (response.status === 415) throw new Error("Only PDF files (.pdf) are supported.");
+    if (response.status === 409) throw new Error("Another PDF processing job is already active; wait for it to finish or retry it.");
+    throw new Error("Document processing is unavailable. Check the file and try again.");
+  }
+  const body: unknown = await response.json();
+  if (!validDocument(body)) throw new Error("The server returned an invalid document payload.");
+  return body;
+}
+
 async function parseWorkspace(response: Response): Promise<WorkspaceResponse> {
   if (response.status === 401) throw new Error("Your session expired. Sign in again.");
   if (response.status === 404) throw new Error("Workspace not found.");
@@ -198,8 +266,24 @@ function validRuns(value: unknown): boolean {
     (run.action_version === undefined || run.action_version === null || typeof run.action_version === "string") &&
     typeof run.superseded === "boolean" && typeof run.created_at === "string" && run.created_at.length > 0));
 }
+function validDocument(value: unknown): value is DocumentSummary {
+  return record(value) && typeof value.id === "string" && value.id.length > 0 &&
+    typeof value.business_id === "string" && value.business_id.length > 0 &&
+    typeof value.filename === "string" && value.filename.length > 0 &&
+    typeof value.sha256 === "string" && value.sha256.length === 64 &&
+    Number.isInteger(value.byte_size) && Number(value.byte_size) > 0 &&
+    (value.page_count === null || (Number.isInteger(value.page_count) && Number(value.page_count) >= 1 && Number(value.page_count) <= 50)) &&
+    (value.extracted_char_count === null || (Number.isInteger(value.extracted_char_count) && Number(value.extracted_char_count) >= 0)) &&
+    ["processing", "ready", "failed"].includes(value.status as string) &&
+    (value.error_code === null || typeof value.error_code === "string") &&
+    (value.error_message === null || typeof value.error_message === "string") &&
+    typeof value.created_at === "string" && typeof value.updated_at === "string";
+}
+function validDocuments(value: unknown): boolean {
+  return value === undefined || (Array.isArray(value) && value.every(validDocument));
+}
 function validWorkspace(value: unknown): value is WorkspaceResponse {
-  if (!record(value) || typeof value.business_id !== "string" || !Number.isInteger(value.input_revision) || !validRequest(value.request) || !validRuns(value.runs)) return false;
+  if (!record(value) || typeof value.business_id !== "string" || !Number.isInteger(value.input_revision) || !validRequest(value.request) || !validRuns(value.runs) || !validDocuments(value.documents)) return false;
   if (value.latest_analysis === null || value.latest_analysis === undefined) return true;
   return validResponse(value.latest_analysis, formFromRequest(value.request));
 }

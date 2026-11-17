@@ -278,3 +278,56 @@ test("updateWorkspace sends expected_revision, handles 409 conflicts, validates 
   expect(html).toContain("Revision 2");
   expect(html).toContain("4.00x");
 });
+
+test("document client uploads, retries, deletes, surfaces validation errors, and guards document payloads", async () => {
+  const {
+    deleteDocument,
+    fetchWorkspace,
+    retryDocument,
+    uploadDocument,
+  } = await import("../src/features/analysis/api");
+  const form = reviewed();
+  const payload = analysisRequest(form);
+  const validDoc = {
+    id: "dddddddd-dddd-dddd-dddd-dddddddddddd",
+    business_id: "11111111-1111-1111-1111-111111111111",
+    filename: "FY24_Statement.pdf",
+    sha256: "a".repeat(64),
+    byte_size: 24576,
+    page_count: 4,
+    extracted_char_count: 1420,
+    status: "ready" as const,
+    error_code: null,
+    error_message: null,
+    created_at: "2026-11-17T10:00:00Z",
+    updated_at: "2026-11-17T10:00:01Z",
+  };
+
+  respond(validDoc, 201);
+  const file = new File(["%PDF-1.4 sample"], "FY24_Statement.pdf", { type: "application/pdf" });
+  const uploaded = await uploadDocument("11111111-1111-1111-1111-111111111111", file);
+  expect(uploaded).toEqual(validDoc);
+
+  respond({ detail: { code: "scanned_only_pdf", message: "Scanned or image-only PDFs without selectable digital text are not supported." } }, 422);
+  await expect(uploadDocument("11111111-1111-1111-1111-111111111111", file)).rejects.toThrow("Scanned or image-only PDFs");
+
+  respond({ detail: { code: "active_job_exists", message: "Another PDF processing job is already active; wait for it to finish or retry it." } }, 409);
+  await expect(uploadDocument("11111111-1111-1111-1111-111111111111", file)).rejects.toThrow("already active");
+
+  respond(validDoc, 200);
+  const retried = await retryDocument("11111111-1111-1111-1111-111111111111", validDoc.id);
+  expect(retried.status).toBe("ready");
+
+  respond({ status: "deleted" }, 200);
+  await expect(deleteDocument("11111111-1111-1111-1111-111111111111", validDoc.id)).resolves.toBeUndefined();
+
+  respond({
+    business_id: "11111111-1111-1111-1111-111111111111",
+    input_revision: 1,
+    request: payload,
+    latest_run_id: null,
+    latest_analysis: null,
+    documents: [{ ...validDoc, status: "unknown" }],
+  });
+  await expect(fetchWorkspace("11111111-1111-1111-1111-111111111111")).rejects.toThrow("invalid workspace payload");
+});

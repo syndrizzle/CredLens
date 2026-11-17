@@ -16,6 +16,8 @@ dist-ssr
 .venv/
 __pycache__/
 .pytest_cache/
+.storage/
+backend/.storage/
 
 # Editor directories and files
 .vscode/*

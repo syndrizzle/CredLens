@@ -262,6 +262,21 @@ class AnalysisRunResponse(AnalysisResponse):
         return super().__eq__(other)
 
 
+class DocumentSummary(Model):
+    id: UUID
+    business_id: UUID
+    filename: str
+    sha256: str
+    byte_size: int = Field(ge=1, le=20971520)
+    page_count: int | None = Field(default=None, ge=1, le=50)
+    extracted_char_count: int | None = Field(default=None, ge=0)
+    status: Literal["processing", "ready", "failed"]
+    error_code: str | None = None
+    error_message: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
 class WorkspaceResponse(Model):
     business_id: UUID
     input_revision: int
@@ -269,3 +284,4 @@ class WorkspaceResponse(Model):
     latest_run_id: UUID | None = None
     latest_analysis: AnalysisResponse | None = None
     runs: list[AnalysisRunSummary] = Field(default_factory=list)
+    documents: list[DocumentSummary] = Field(default_factory=list)
