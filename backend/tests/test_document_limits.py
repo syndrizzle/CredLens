@@ -8,7 +8,7 @@ from unittest.mock import Mock
 import pytest
 
 from app import document_ingress, documents, pdf_limits, pdf_worker
-from test_documents import build_minimal_pdf
+from pdf_helpers import build_minimal_pdf
 
 
 def test_page_iteration_stops_before_page_51(tmp_path, monkeypatch):

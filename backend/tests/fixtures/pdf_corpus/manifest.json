@@ -1,0 +1,2363 @@
+{
+  "version": "credlens-pdf-corpus-v1",
+  "frozen_on": "2026-11-19",
+  "annotation_author": "Codex agent",
+  "annotation_check": "Agent self-check against reference JSON, Decimal arithmetic, and rendered pages; no independent human review",
+  "independent_checker": null,
+  "held_out_policy": "Fixture integrity checks are allowed. No matcher/evaluation runs before extractor v1 freeze; no tuning against held-out labels, values, or extraction output.",
+  "extractor_evaluation_runs": [],
+  "documents": [
+    {
+      "file": "aster-reference.pdf",
+      "split": "development",
+      "business": "Aster Components (fictional)",
+      "layout": "A",
+      "purpose": "24-value reference case",
+      "pages": [
+        {
+          "title": "Standalone profit and loss",
+          "context": [
+            "Years ended 31 March 2025 and 31 March 2024; full April-March years.",
+            "Amounts in INR rupees."
+          ],
+          "unit": "rupees",
+          "multiplier": "1",
+          "headers": [
+            "Particulars",
+            "Note",
+            "31 Mar 2025",
+            "31 Mar 2024"
+          ],
+          "rows": [
+            {
+              "field": "revenue",
+              "label": "Revenue from operations",
+              "note": "11",
+              "values": [
+                {
+                  "raw": "12000000.00",
+                  "year_start": 2024,
+                  "amount": "12000000.00",
+                  "normalized_inr": "12000000.00",
+                  "issues": []
+                },
+                {
+                  "raw": "10000000.00",
+                  "year_start": 2023,
+                  "amount": "10000000.00",
+                  "normalized_inr": "10000000.00",
+                  "issues": []
+                }
+              ]
+            },
+            {
+              "field": "profit_after_tax",
+              "label": "Profit after tax",
+              "note": "12",
+              "values": [
+                {
+                  "raw": "600000.00",
+                  "year_start": 2024,
+                  "amount": "600000.00",
+                  "normalized_inr": "600000.00",
+                  "issues": []
+                },
+                {
+                  "raw": "900000.00",
+                  "year_start": 2023,
+                  "amount": "900000.00",
+                  "normalized_inr": "900000.00",
+                  "issues": []
+                }
+              ]
+            },
+            {
+              "field": "ebit",
+              "label": "Earnings before interest and tax",
+              "note": "13",
+              "values": [
+                {
+                  "raw": "1200000.00",
+                  "year_start": 2024,
+                  "amount": "1200000.00",
+                  "normalized_inr": "1200000.00",
+                  "issues": []
+                },
+                {
+                  "raw": "1500000.00",
+                  "year_start": 2023,
+                  "amount": "1500000.00",
+                  "normalized_inr": "1500000.00",
+                  "issues": []
+                }
+              ]
+            },
+            {
+              "field": "interest_expense",
+              "label": "Interest expense",
+              "note": "14",
+              "values": [
+                {
+                  "raw": "400000.00",
+                  "year_start": 2024,
+                  "amount": "400000.00",
+                  "normalized_inr": "400000.00",
+                  "issues": []
+                },
+                {
+                  "raw": "300000.00",
+                  "year_start": 2023,
+                  "amount": "300000.00",
+                  "normalized_inr": "300000.00",
+                  "issues": []
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "title": "Standalone balance sheet",
+          "context": [
+            "Years ended 31 March 2025 and 31 March 2024; full April-March years.",
+            "Amounts in INR rupees."
+          ],
+          "unit": "rupees",
+          "multiplier": "1",
+          "headers": [
+            "Particulars",
+            "Note",
+            "31 Mar 2025",
+            "31 Mar 2024"
+          ],
+          "rows": [
+            {
+              "field": "current_assets",
+              "label": "Total current assets",
+              "note": "11",
+              "values": [
+                {
+                  "raw": "5000000.00",
+                  "year_start": 2024,
+                  "amount": "5000000.00",
+                  "normalized_inr": "5000000.00",
+                  "issues": []
+                },
+                {
+                  "raw": "4000000.00",
+                  "year_start": 2023,
+                  "amount": "4000000.00",
+                  "normalized_inr": "4000000.00",
+                  "issues": []
+                }
+              ]
+            },
+            {
+              "field": "current_liabilities",
+              "label": "Total current liabilities",
+              "note": "12",
+              "values": [
+                {
+                  "raw": "2500000.00",
+                  "year_start": 2024,
+                  "amount": "2500000.00",
+                  "normalized_inr": "2500000.00",
+                  "issues": []
+                },
+                {
+                  "raw": "2000000.00",
+                  "year_start": 2023,
+                  "amount": "2000000.00",
+                  "normalized_inr": "2000000.00",
+                  "issues": []
+                }
+              ]
+            },
+            {
+              "field": "total_assets",
+              "label": "Total assets",
+              "note": "13",
+              "values": [
+                {
+                  "raw": "12000000.00",
+                  "year_start": 2024,
+                  "amount": "12000000.00",
+                  "normalized_inr": "12000000.00",
+                  "issues": []
+                },
+                {
+                  "raw": "10000000.00",
+                  "year_start": 2023,
+                  "amount": "10000000.00",
+                  "normalized_inr": "10000000.00",
+                  "issues": []
+                }
+              ]
+            },
+            {
+              "field": "total_liabilities",
+              "label": "Total liabilities excluding equity",
+              "note": "14",
+              "values": [
+                {
+                  "raw": "5000000.00",
+                  "year_start": 2024,
+                  "amount": "5000000.00",
+                  "normalized_inr": "5000000.00",
+                  "issues": []
+                },
+                {
+                  "raw": "4000000.00",
+                  "year_start": 2023,
+                  "amount": "4000000.00",
+                  "normalized_inr": "4000000.00",
+                  "issues": []
+                }
+              ]
+            },
+            {
+              "field": "total_equity",
+              "label": "Total equity",
+              "note": "15",
+              "values": [
+                {
+                  "raw": "7000000.00",
+                  "year_start": 2024,
+                  "amount": "7000000.00",
+                  "normalized_inr": "7000000.00",
+                  "issues": []
+                },
+                {
+                  "raw": "6000000.00",
+                  "year_start": 2023,
+                  "amount": "6000000.00",
+                  "normalized_inr": "6000000.00",
+                  "issues": []
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "title": "Standalone borrowing detail",
+          "context": [
+            "Years ended 31 March 2025 and 31 March 2024; full April-March years.",
+            "Amounts in INR rupees."
+          ],
+          "unit": "rupees",
+          "multiplier": "1",
+          "headers": [
+            "Particulars",
+            "Note",
+            "31 Mar 2025",
+            "31 Mar 2024"
+          ],
+          "rows": [
+            {
+              "field": "short_term_borrowings",
+              "label": "Short-term borrowings",
+              "note": "11",
+              "values": [
+                {
+                  "raw": "600000.00",
+                  "year_start": 2024,
+                  "amount": "600000.00",
+                  "normalized_inr": "600000.00",
+                  "issues": []
+                },
+                {
+                  "raw": "500000.00",
+                  "year_start": 2023,
+                  "amount": "500000.00",
+                  "normalized_inr": "500000.00",
+                  "issues": []
+                }
+              ]
+            },
+            {
+              "field": "long_term_borrowings",
+              "label": "Non-current borrowings",
+              "note": "12",
+              "values": [
+                {
+                  "raw": "1200000.00",
+                  "year_start": 2024,
+                  "amount": "1200000.00",
+                  "normalized_inr": "1200000.00",
+                  "issues": []
+                },
+                {
+                  "raw": "1000000.00",
+                  "year_start": 2023,
+                  "amount": "1000000.00",
+                  "normalized_inr": "1000000.00",
+                  "issues": []
+                }
+              ]
+            },
+            {
+              "field": "current_maturities",
+              "label": "Current maturities of long-term borrowings",
+              "note": "13",
+              "values": [
+                {
+                  "raw": "300000.00",
+                  "year_start": 2024,
+                  "amount": "300000.00",
+                  "normalized_inr": "300000.00",
+                  "issues": []
+                },
+                {
+                  "raw": "300000.00",
+                  "year_start": 2023,
+                  "amount": "300000.00",
+                  "normalized_inr": "300000.00",
+                  "issues": []
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "sha256": "652561a2e35f2b3c2e162537f4d71018bb80790e20ef07ad2022e0802c14d02e"
+    },
+    {
+      "file": "aster-numbers.pdf",
+      "split": "development",
+      "business": "Aster Components (fictional)",
+      "layout": "A",
+      "purpose": "Indian/international grouping, parenthesized loss, explicit zero",
+      "pages": [
+        {
+          "title": "Standalone profit and loss",
+          "context": [
+            "Years ended 31 March 2025 and 31 March 2024; full April-March years.",
+            "Amounts in INR rupees."
+          ],
+          "unit": "rupees",
+          "multiplier": "1",
+          "headers": [
+            "Particulars",
+            "Note",
+            "31 Mar 2025",
+            "31 Mar 2024"
+          ],
+          "rows": [
+            {
+              "field": "revenue",
+              "label": "Revenue from operations",
+              "note": "11",
+              "values": [
+                {
+                  "raw": "1,20,00,000.00",
+                  "year_start": 2024,
+                  "amount": "12000000.00",
+                  "normalized_inr": "12000000.00",
+                  "issues": []
+                },
+                {
+                  "raw": "10,000,000.00",
+                  "year_start": 2023,
+                  "amount": "10000000.00",
+                  "normalized_inr": "10000000.00",
+                  "issues": []
+                }
+              ]
+            },
+            {
+              "field": "profit_after_tax",
+              "label": "Profit after tax",
+              "note": "12",
+              "values": [
+                {
+                  "raw": "(600,000.00)",
+                  "year_start": 2024,
+                  "amount": "-600000.00",
+                  "normalized_inr": "-600000.00",
+                  "issues": []
+                },
+                {
+                  "raw": "900000.00",
+                  "year_start": 2023,
+                  "amount": "900000.00",
+                  "normalized_inr": "900000.00",
+                  "issues": []
+                }
+              ]
+            },
+            {
+              "field": "ebit",
+              "label": "Earnings before interest and tax",
+              "note": "13",
+              "values": [
+                {
+                  "raw": "1200000.00",
+                  "year_start": 2024,
+                  "amount": "1200000.00",
+                  "normalized_inr": "1200000.00",
+                  "issues": []
+                },
+                {
+                  "raw": "1500000.00",
+                  "year_start": 2023,
+                  "amount": "1500000.00",
+                  "normalized_inr": "1500000.00",
+                  "issues": []
+                }
+              ]
+            },
+            {
+              "field": "interest_expense",
+              "label": "Interest expense",
+              "note": "14",
+              "values": [
+                {
+                  "raw": "0.00",
+                  "year_start": 2024,
+                  "amount": "0.00",
+                  "normalized_inr": "0.00",
+                  "issues": []
+                },
+                {
+                  "raw": "300000.00",
+                  "year_start": 2023,
+                  "amount": "300000.00",
+                  "normalized_inr": "300000.00",
+                  "issues": []
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "title": "Standalone balance sheet",
+          "context": [
+            "Years ended 31 March 2025 and 31 March 2024; full April-March years.",
+            "Amounts in INR rupees."
+          ],
+          "unit": "rupees",
+          "multiplier": "1",
+          "headers": [
+            "Particulars",
+            "Note",
+            "31 Mar 2025",
+            "31 Mar 2024"
+          ],
+          "rows": [
+            {
+              "field": "current_assets",
+              "label": "Total current assets",
+              "note": "11",
+              "values": [
+                {
+                  "raw": "5000000.00",
+                  "year_start": 2024,
+                  "amount": "5000000.00",
+                  "normalized_inr": "5000000.00",
+                  "issues": []
+                },
+                {
+                  "raw": "4000000.00",
+                  "year_start": 2023,
+                  "amount": "4000000.00",
+                  "normalized_inr": "4000000.00",
+                  "issues": []
+                }
+              ]
+            },
+            {
+              "field": "current_liabilities",
+              "label": "Total current liabilities",
+              "note": "12",
+              "values": [
+                {
+                  "raw": "2500000.00",
+                  "year_start": 2024,
+                  "amount": "2500000.00",
+                  "normalized_inr": "2500000.00",
+                  "issues": []
+                },
+                {
+                  "raw": "2000000.00",
+                  "year_start": 2023,
+                  "amount": "2000000.00",
+                  "normalized_inr": "2000000.00",
+                  "issues": []
+                }
+              ]
+            },
+            {
+              "field": "total_assets",
+              "label": "Total assets",
+              "note": "13",
+              "values": [
+                {
+                  "raw": "12000000.00",
+                  "year_start": 2024,
+                  "amount": "12000000.00",
+                  "normalized_inr": "12000000.00",
+                  "issues": []
+                },
+                {
+                  "raw": "10000000.00",
+                  "year_start": 2023,
+                  "amount": "10000000.00",
+                  "normalized_inr": "10000000.00",
+                  "issues": []
+                }
+              ]
+            },
+            {
+              "field": "total_liabilities",
+              "label": "Total liabilities excluding equity",
+              "note": "14",
+              "values": [
+                {
+                  "raw": "5000000.00",
+                  "year_start": 2024,
+                  "amount": "5000000.00",
+                  "normalized_inr": "5000000.00",
+                  "issues": []
+                },
+                {
+                  "raw": "4000000.00",
+                  "year_start": 2023,
+                  "amount": "4000000.00",
+                  "normalized_inr": "4000000.00",
+                  "issues": []
+                }
+              ]
+            },
+            {
+              "field": "total_equity",
+              "label": "Total equity",
+              "note": "15",
+              "values": [
+                {
+                  "raw": "7000000.00",
+                  "year_start": 2024,
+                  "amount": "7000000.00",
+                  "normalized_inr": "7000000.00",
+                  "issues": []
+                },
+                {
+                  "raw": "6000000.00",
+                  "year_start": 2023,
+                  "amount": "6000000.00",
+                  "normalized_inr": "6000000.00",
+                  "issues": []
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "title": "Standalone borrowing detail",
+          "context": [
+            "Years ended 31 March 2025 and 31 March 2024; full April-March years.",
+            "Amounts in INR rupees."
+          ],
+          "unit": "rupees",
+          "multiplier": "1",
+          "headers": [
+            "Particulars",
+            "Note",
+            "31 Mar 2025",
+            "31 Mar 2024"
+          ],
+          "rows": [
+            {
+              "field": "short_term_borrowings",
+              "label": "Short-term borrowings",
+              "note": "11",
+              "values": [
+                {
+                  "raw": "600000.00",
+                  "year_start": 2024,
+                  "amount": "600000.00",
+                  "normalized_inr": "600000.00",
+                  "issues": []
+                },
+                {
+                  "raw": "500000.00",
+                  "year_start": 2023,
+                  "amount": "500000.00",
+                  "normalized_inr": "500000.00",
+                  "issues": []
+                }
+              ]
+            },
+            {
+              "field": "long_term_borrowings",
+              "label": "Non-current borrowings",
+              "note": "12",
+              "values": [
+                {
+                  "raw": "1200000.00",
+                  "year_start": 2024,
+                  "amount": "1200000.00",
+                  "normalized_inr": "1200000.00",
+                  "issues": []
+                },
+                {
+                  "raw": "1000000.00",
+                  "year_start": 2023,
+                  "amount": "1000000.00",
+                  "normalized_inr": "1000000.00",
+                  "issues": []
+                }
+              ]
+            },
+            {
+              "field": "current_maturities",
+              "label": "Current maturities of long-term borrowings",
+              "note": "13",
+              "values": [
+                {
+                  "raw": "300000.00",
+                  "year_start": 2024,
+                  "amount": "300000.00",
+                  "normalized_inr": "300000.00",
+                  "issues": []
+                },
+                {
+                  "raw": "300000.00",
+                  "year_start": 2023,
+                  "amount": "300000.00",
+                  "normalized_inr": "300000.00",
+                  "issues": []
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "sha256": "ac7e327b5d56d5745692663da3fb47d0e0470a0d6ca784b3e6f0588cdf8df74b"
+    },
+    {
+      "file": "aster-blank-interest.pdf",
+      "split": "development",
+      "business": "Aster Components (fictional)",
+      "layout": "A",
+      "purpose": "blank interest is missing, never zero",
+      "pages": [
+        {
+          "title": "Standalone profit and loss",
+          "context": [
+            "Years ended 31 March 2025 and 31 March 2024; full April-March years.",
+            "Amounts in INR rupees."
+          ],
+          "unit": "rupees",
+          "multiplier": "1",
+          "headers": [
+            "Particulars",
+            "Note",
+            "31 Mar 2025",
+            "31 Mar 2024"
+          ],
+          "rows": [
+            {
+              "field": "revenue",
+              "label": "Revenue from operations",
+              "note": "11",
+              "values": [
+                {
+                  "raw": "12000000.00",
+                  "year_start": 2024,
+                  "amount": "12000000.00",
+                  "normalized_inr": "12000000.00",
+                  "issues": []
+                },
+                {
+                  "raw": "10000000.00",
+                  "year_start": 2023,
+                  "amount": "10000000.00",
+                  "normalized_inr": "10000000.00",
+                  "issues": []
+                }
+              ]
+            },
+            {
+              "field": "profit_after_tax",
+              "label": "Profit after tax",
+              "note": "12",
+              "values": [
+                {
+                  "raw": "600000.00",
+                  "year_start": 2024,
+                  "amount": "600000.00",
+                  "normalized_inr": "600000.00",
+                  "issues": []
+                },
+                {
+                  "raw": "900000.00",
+                  "year_start": 2023,
+                  "amount": "900000.00",
+                  "normalized_inr": "900000.00",
+                  "issues": []
+                }
+              ]
+            },
+            {
+              "field": "ebit",
+              "label": "Earnings before interest and tax",
+              "note": "13",
+              "values": [
+                {
+                  "raw": "1200000.00",
+                  "year_start": 2024,
+                  "amount": "1200000.00",
+                  "normalized_inr": "1200000.00",
+                  "issues": []
+                },
+                {
+                  "raw": "1500000.00",
+                  "year_start": 2023,
+                  "amount": "1500000.00",
+                  "normalized_inr": "1500000.00",
+                  "issues": []
+                }
+              ]
+            },
+            {
+              "field": "interest_expense",
+              "label": "Interest expense",
+              "note": "14",
+              "values": [
+                {
+                  "raw": "",
+                  "year_start": 2024,
+                  "amount": null,
+                  "normalized_inr": null,
+                  "issues": [
+                    "missing_value"
+                  ]
+                },
+                {
+                  "raw": "300000.00",
+                  "year_start": 2023,
+                  "amount": "300000.00",
+                  "normalized_inr": "300000.00",
+                  "issues": []
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "sha256": "b47403abd31c894a337f6d0cc337345e4f0906f1967460e25f84a97714b6f504"
+    },
+    {
+      "file": "aster-dash-interest.pdf",
+      "split": "development",
+      "business": "Aster Components (fictional)",
+      "layout": "A",
+      "purpose": "dash interest is missing, never zero",
+      "pages": [
+        {
+          "title": "Standalone profit and loss",
+          "context": [
+            "Years ended 31 March 2025 and 31 March 2024; full April-March years.",
+            "Amounts in INR rupees."
+          ],
+          "unit": "rupees",
+          "multiplier": "1",
+          "headers": [
+            "Particulars",
+            "Note",
+            "31 Mar 2025",
+            "31 Mar 2024"
+          ],
+          "rows": [
+            {
+              "field": "revenue",
+              "label": "Revenue from operations",
+              "note": "11",
+              "values": [
+                {
+                  "raw": "12000000.00",
+                  "year_start": 2024,
+                  "amount": "12000000.00",
+                  "normalized_inr": "12000000.00",
+                  "issues": []
+                },
+                {
+                  "raw": "10000000.00",
+                  "year_start": 2023,
+                  "amount": "10000000.00",
+                  "normalized_inr": "10000000.00",
+                  "issues": []
+                }
+              ]
+            },
+            {
+              "field": "profit_after_tax",
+              "label": "Profit after tax",
+              "note": "12",
+              "values": [
+                {
+                  "raw": "600000.00",
+                  "year_start": 2024,
+                  "amount": "600000.00",
+                  "normalized_inr": "600000.00",
+                  "issues": []
+                },
+                {
+                  "raw": "900000.00",
+                  "year_start": 2023,
+                  "amount": "900000.00",
+                  "normalized_inr": "900000.00",
+                  "issues": []
+                }
+              ]
+            },
+            {
+              "field": "ebit",
+              "label": "Earnings before interest and tax",
+              "note": "13",
+              "values": [
+                {
+                  "raw": "1200000.00",
+                  "year_start": 2024,
+                  "amount": "1200000.00",
+                  "normalized_inr": "1200000.00",
+                  "issues": []
+                },
+                {
+                  "raw": "1500000.00",
+                  "year_start": 2023,
+                  "amount": "1500000.00",
+                  "normalized_inr": "1500000.00",
+                  "issues": []
+                }
+              ]
+            },
+            {
+              "field": "interest_expense",
+              "label": "Interest expense",
+              "note": "14",
+              "values": [
+                {
+                  "raw": "-",
+                  "year_start": 2024,
+                  "amount": null,
+                  "normalized_inr": null,
+                  "issues": [
+                    "missing_value"
+                  ]
+                },
+                {
+                  "raw": "300000.00",
+                  "year_start": 2023,
+                  "amount": "300000.00",
+                  "normalized_inr": "300000.00",
+                  "issues": []
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "sha256": "7837f54456321fa1a5b389c70838210be0d8334ddb44fdfb87d2138115ee815c"
+    },
+    {
+      "file": "aster-reversed-years.pdf",
+      "split": "development",
+      "business": "Aster Components (fictional)",
+      "layout": "A",
+      "purpose": "Year mapping follows headers, not column position",
+      "pages": [
+        {
+          "title": "Standalone profit and loss",
+          "context": [
+            "Years ended 31 March 2025 and 31 March 2024; full April-March years.",
+            "Amounts in INR rupees."
+          ],
+          "unit": "rupees",
+          "multiplier": "1",
+          "headers": [
+            "Particulars",
+            "Note",
+            "31 Mar 2024",
+            "31 Mar 2025"
+          ],
+          "rows": [
+            {
+              "field": "revenue",
+              "label": "Revenue from operations",
+              "note": "11",
+              "values": [
+                {
+                  "raw": "10000000.00",
+                  "year_start": 2023,
+                  "amount": "10000000.00",
+                  "normalized_inr": "10000000.00",
+                  "issues": []
+                },
+                {
+                  "raw": "12000000.00",
+                  "year_start": 2024,
+                  "amount": "12000000.00",
+                  "normalized_inr": "12000000.00",
+                  "issues": []
+                }
+              ]
+            },
+            {
+              "field": "profit_after_tax",
+              "label": "Profit after tax",
+              "note": "12",
+              "values": [
+                {
+                  "raw": "900000.00",
+                  "year_start": 2023,
+                  "amount": "900000.00",
+                  "normalized_inr": "900000.00",
+                  "issues": []
+                },
+                {
+                  "raw": "600000.00",
+                  "year_start": 2024,
+                  "amount": "600000.00",
+                  "normalized_inr": "600000.00",
+                  "issues": []
+                }
+              ]
+            },
+            {
+              "field": "ebit",
+              "label": "Earnings before interest and tax",
+              "note": "13",
+              "values": [
+                {
+                  "raw": "1500000.00",
+                  "year_start": 2023,
+                  "amount": "1500000.00",
+                  "normalized_inr": "1500000.00",
+                  "issues": []
+                },
+                {
+                  "raw": "1200000.00",
+                  "year_start": 2024,
+                  "amount": "1200000.00",
+                  "normalized_inr": "1200000.00",
+                  "issues": []
+                }
+              ]
+            },
+            {
+              "field": "interest_expense",
+              "label": "Interest expense",
+              "note": "14",
+              "values": [
+                {
+                  "raw": "300000.00",
+                  "year_start": 2023,
+                  "amount": "300000.00",
+                  "normalized_inr": "300000.00",
+                  "issues": []
+                },
+                {
+                  "raw": "400000.00",
+                  "year_start": 2024,
+                  "amount": "400000.00",
+                  "normalized_inr": "400000.00",
+                  "issues": []
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "title": "Standalone balance sheet",
+          "context": [
+            "Years ended 31 March 2025 and 31 March 2024; full April-March years.",
+            "Amounts in INR rupees."
+          ],
+          "unit": "rupees",
+          "multiplier": "1",
+          "headers": [
+            "Particulars",
+            "Note",
+            "31 Mar 2024",
+            "31 Mar 2025"
+          ],
+          "rows": [
+            {
+              "field": "current_assets",
+              "label": "Total current assets",
+              "note": "11",
+              "values": [
+                {
+                  "raw": "4000000.00",
+                  "year_start": 2023,
+                  "amount": "4000000.00",
+                  "normalized_inr": "4000000.00",
+                  "issues": []
+                },
+                {
+                  "raw": "5000000.00",
+                  "year_start": 2024,
+                  "amount": "5000000.00",
+                  "normalized_inr": "5000000.00",
+                  "issues": []
+                }
+              ]
+            },
+            {
+              "field": "current_liabilities",
+              "label": "Total current liabilities",
+              "note": "12",
+              "values": [
+                {
+                  "raw": "2000000.00",
+                  "year_start": 2023,
+                  "amount": "2000000.00",
+                  "normalized_inr": "2000000.00",
+                  "issues": []
+                },
+                {
+                  "raw": "2500000.00",
+                  "year_start": 2024,
+                  "amount": "2500000.00",
+                  "normalized_inr": "2500000.00",
+                  "issues": []
+                }
+              ]
+            },
+            {
+              "field": "total_assets",
+              "label": "Total assets",
+              "note": "13",
+              "values": [
+                {
+                  "raw": "10000000.00",
+                  "year_start": 2023,
+                  "amount": "10000000.00",
+                  "normalized_inr": "10000000.00",
+                  "issues": []
+                },
+                {
+                  "raw": "12000000.00",
+                  "year_start": 2024,
+                  "amount": "12000000.00",
+                  "normalized_inr": "12000000.00",
+                  "issues": []
+                }
+              ]
+            },
+            {
+              "field": "total_liabilities",
+              "label": "Total liabilities excluding equity",
+              "note": "14",
+              "values": [
+                {
+                  "raw": "4000000.00",
+                  "year_start": 2023,
+                  "amount": "4000000.00",
+                  "normalized_inr": "4000000.00",
+                  "issues": []
+                },
+                {
+                  "raw": "5000000.00",
+                  "year_start": 2024,
+                  "amount": "5000000.00",
+                  "normalized_inr": "5000000.00",
+                  "issues": []
+                }
+              ]
+            },
+            {
+              "field": "total_equity",
+              "label": "Total equity",
+              "note": "15",
+              "values": [
+                {
+                  "raw": "6000000.00",
+                  "year_start": 2023,
+                  "amount": "6000000.00",
+                  "normalized_inr": "6000000.00",
+                  "issues": []
+                },
+                {
+                  "raw": "7000000.00",
+                  "year_start": 2024,
+                  "amount": "7000000.00",
+                  "normalized_inr": "7000000.00",
+                  "issues": []
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "title": "Standalone borrowing detail",
+          "context": [
+            "Years ended 31 March 2025 and 31 March 2024; full April-March years.",
+            "Amounts in INR rupees."
+          ],
+          "unit": "rupees",
+          "multiplier": "1",
+          "headers": [
+            "Particulars",
+            "Note",
+            "31 Mar 2024",
+            "31 Mar 2025"
+          ],
+          "rows": [
+            {
+              "field": "short_term_borrowings",
+              "label": "Short-term borrowings",
+              "note": "11",
+              "values": [
+                {
+                  "raw": "500000.00",
+                  "year_start": 2023,
+                  "amount": "500000.00",
+                  "normalized_inr": "500000.00",
+                  "issues": []
+                },
+                {
+                  "raw": "600000.00",
+                  "year_start": 2024,
+                  "amount": "600000.00",
+                  "normalized_inr": "600000.00",
+                  "issues": []
+                }
+              ]
+            },
+            {
+              "field": "long_term_borrowings",
+              "label": "Non-current borrowings",
+              "note": "12",
+              "values": [
+                {
+                  "raw": "1000000.00",
+                  "year_start": 2023,
+                  "amount": "1000000.00",
+                  "normalized_inr": "1000000.00",
+                  "issues": []
+                },
+                {
+                  "raw": "1200000.00",
+                  "year_start": 2024,
+                  "amount": "1200000.00",
+                  "normalized_inr": "1200000.00",
+                  "issues": []
+                }
+              ]
+            },
+            {
+              "field": "current_maturities",
+              "label": "Current maturities of long-term borrowings",
+              "note": "13",
+              "values": [
+                {
+                  "raw": "300000.00",
+                  "year_start": 2023,
+                  "amount": "300000.00",
+                  "normalized_inr": "300000.00",
+                  "issues": []
+                },
+                {
+                  "raw": "300000.00",
+                  "year_start": 2024,
+                  "amount": "300000.00",
+                  "normalized_inr": "300000.00",
+                  "issues": []
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "sha256": "591aa999afef8e1b803ba83c0897833f0c658e6e5b1cd6e19adcb04f345adf8d"
+    },
+    {
+      "file": "aster-missing-unit.pdf",
+      "split": "development",
+      "business": "Aster Components (fictional)",
+      "layout": "A",
+      "purpose": "missing unit must prevent a usable normalized candidate",
+      "pages": [
+        {
+          "title": "Standalone profit and loss",
+          "context": [
+            "Years ended 31 March 2025 and 31 March 2024; full April-March years."
+          ],
+          "unit": null,
+          "multiplier": null,
+          "headers": [
+            "Particulars",
+            "Note",
+            "31 Mar 2025",
+            "31 Mar 2024"
+          ],
+          "rows": [
+            {
+              "field": "revenue",
+              "label": "Revenue from operations",
+              "note": "11",
+              "values": [
+                {
+                  "raw": "12000000.00",
+                  "year_start": 2024,
+                  "amount": "12000000.00",
+                  "normalized_inr": null,
+                  "issues": [
+                    "missing_unit"
+                  ]
+                },
+                {
+                  "raw": "10000000.00",
+                  "year_start": 2023,
+                  "amount": "10000000.00",
+                  "normalized_inr": null,
+                  "issues": [
+                    "missing_unit"
+                  ]
+                }
+              ]
+            },
+            {
+              "field": "profit_after_tax",
+              "label": "Profit after tax",
+              "note": "12",
+              "values": [
+                {
+                  "raw": "600000.00",
+                  "year_start": 2024,
+                  "amount": "600000.00",
+                  "normalized_inr": null,
+                  "issues": [
+                    "missing_unit"
+                  ]
+                },
+                {
+                  "raw": "900000.00",
+                  "year_start": 2023,
+                  "amount": "900000.00",
+                  "normalized_inr": null,
+                  "issues": [
+                    "missing_unit"
+                  ]
+                }
+              ]
+            },
+            {
+              "field": "ebit",
+              "label": "Earnings before interest and tax",
+              "note": "13",
+              "values": [
+                {
+                  "raw": "1200000.00",
+                  "year_start": 2024,
+                  "amount": "1200000.00",
+                  "normalized_inr": null,
+                  "issues": [
+                    "missing_unit"
+                  ]
+                },
+                {
+                  "raw": "1500000.00",
+                  "year_start": 2023,
+                  "amount": "1500000.00",
+                  "normalized_inr": null,
+                  "issues": [
+                    "missing_unit"
+                  ]
+                }
+              ]
+            },
+            {
+              "field": "interest_expense",
+              "label": "Interest expense",
+              "note": "14",
+              "values": [
+                {
+                  "raw": "400000.00",
+                  "year_start": 2024,
+                  "amount": "400000.00",
+                  "normalized_inr": null,
+                  "issues": [
+                    "missing_unit"
+                  ]
+                },
+                {
+                  "raw": "300000.00",
+                  "year_start": 2023,
+                  "amount": "300000.00",
+                  "normalized_inr": null,
+                  "issues": [
+                    "missing_unit"
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "sha256": "6ebd3c70b6a42853426c354999ff027752448cdac74b44d6c68de3ac37498dc0"
+    },
+    {
+      "file": "aster-conflicting-unit.pdf",
+      "split": "development",
+      "business": "Aster Components (fictional)",
+      "layout": "A",
+      "purpose": "conflicting unit must prevent a usable normalized candidate",
+      "pages": [
+        {
+          "title": "Standalone profit and loss",
+          "context": [
+            "Years ended 31 March 2025 and 31 March 2024; full April-March years.",
+            "Amounts in INR rupees. Amounts in INR lakhs."
+          ],
+          "unit": null,
+          "multiplier": null,
+          "headers": [
+            "Particulars",
+            "Note",
+            "31 Mar 2025",
+            "31 Mar 2024"
+          ],
+          "rows": [
+            {
+              "field": "revenue",
+              "label": "Revenue from operations",
+              "note": "11",
+              "values": [
+                {
+                  "raw": "12000000.00",
+                  "year_start": 2024,
+                  "amount": "12000000.00",
+                  "normalized_inr": null,
+                  "issues": [
+                    "conflicting_unit"
+                  ]
+                },
+                {
+                  "raw": "10000000.00",
+                  "year_start": 2023,
+                  "amount": "10000000.00",
+                  "normalized_inr": null,
+                  "issues": [
+                    "conflicting_unit"
+                  ]
+                }
+              ]
+            },
+            {
+              "field": "profit_after_tax",
+              "label": "Profit after tax",
+              "note": "12",
+              "values": [
+                {
+                  "raw": "600000.00",
+                  "year_start": 2024,
+                  "amount": "600000.00",
+                  "normalized_inr": null,
+                  "issues": [
+                    "conflicting_unit"
+                  ]
+                },
+                {
+                  "raw": "900000.00",
+                  "year_start": 2023,
+                  "amount": "900000.00",
+                  "normalized_inr": null,
+                  "issues": [
+                    "conflicting_unit"
+                  ]
+                }
+              ]
+            },
+            {
+              "field": "ebit",
+              "label": "Earnings before interest and tax",
+              "note": "13",
+              "values": [
+                {
+                  "raw": "1200000.00",
+                  "year_start": 2024,
+                  "amount": "1200000.00",
+                  "normalized_inr": null,
+                  "issues": [
+                    "conflicting_unit"
+                  ]
+                },
+                {
+                  "raw": "1500000.00",
+                  "year_start": 2023,
+                  "amount": "1500000.00",
+                  "normalized_inr": null,
+                  "issues": [
+                    "conflicting_unit"
+                  ]
+                }
+              ]
+            },
+            {
+              "field": "interest_expense",
+              "label": "Interest expense",
+              "note": "14",
+              "values": [
+                {
+                  "raw": "400000.00",
+                  "year_start": 2024,
+                  "amount": "400000.00",
+                  "normalized_inr": null,
+                  "issues": [
+                    "conflicting_unit"
+                  ]
+                },
+                {
+                  "raw": "300000.00",
+                  "year_start": 2023,
+                  "amount": "300000.00",
+                  "normalized_inr": null,
+                  "issues": [
+                    "conflicting_unit"
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "sha256": "9cef4957100beace5417739fe47c776eef68cd27d161e8cc5e962c8b50533dd1"
+    },
+    {
+      "file": "aster-missing-period.pdf",
+      "split": "development",
+      "business": "Aster Components (fictional)",
+      "layout": "A",
+      "purpose": "missing period must prevent a usable normalized candidate",
+      "pages": [
+        {
+          "title": "Standalone profit and loss",
+          "context": [
+            "Annual statement; exact dates not supplied.",
+            "Amounts in INR rupees."
+          ],
+          "unit": "rupees",
+          "multiplier": "1",
+          "headers": [
+            "Particulars",
+            "Note",
+            "Current year",
+            "Prior year"
+          ],
+          "rows": [
+            {
+              "field": "revenue",
+              "label": "Revenue from operations",
+              "note": "11",
+              "values": [
+                {
+                  "raw": "12000000.00",
+                  "year_start": null,
+                  "amount": "12000000.00",
+                  "normalized_inr": null,
+                  "issues": [
+                    "missing_period"
+                  ]
+                },
+                {
+                  "raw": "10000000.00",
+                  "year_start": null,
+                  "amount": "10000000.00",
+                  "normalized_inr": null,
+                  "issues": [
+                    "missing_period"
+                  ]
+                }
+              ]
+            },
+            {
+              "field": "profit_after_tax",
+              "label": "Profit after tax",
+              "note": "12",
+              "values": [
+                {
+                  "raw": "600000.00",
+                  "year_start": null,
+                  "amount": "600000.00",
+                  "normalized_inr": null,
+                  "issues": [
+                    "missing_period"
+                  ]
+                },
+                {
+                  "raw": "900000.00",
+                  "year_start": null,
+                  "amount": "900000.00",
+                  "normalized_inr": null,
+                  "issues": [
+                    "missing_period"
+                  ]
+                }
+              ]
+            },
+            {
+              "field": "ebit",
+              "label": "Earnings before interest and tax",
+              "note": "13",
+              "values": [
+                {
+                  "raw": "1200000.00",
+                  "year_start": null,
+                  "amount": "1200000.00",
+                  "normalized_inr": null,
+                  "issues": [
+                    "missing_period"
+                  ]
+                },
+                {
+                  "raw": "1500000.00",
+                  "year_start": null,
+                  "amount": "1500000.00",
+                  "normalized_inr": null,
+                  "issues": [
+                    "missing_period"
+                  ]
+                }
+              ]
+            },
+            {
+              "field": "interest_expense",
+              "label": "Interest expense",
+              "note": "14",
+              "values": [
+                {
+                  "raw": "400000.00",
+                  "year_start": null,
+                  "amount": "400000.00",
+                  "normalized_inr": null,
+                  "issues": [
+                    "missing_period"
+                  ]
+                },
+                {
+                  "raw": "300000.00",
+                  "year_start": null,
+                  "amount": "300000.00",
+                  "normalized_inr": null,
+                  "issues": [
+                    "missing_period"
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "sha256": "9f887fccbaba9e7680f61725fdc6e3edad4129b48d8eaf3b4baa6197b95d34e8"
+    },
+    {
+      "file": "aster-conflicting-period.pdf",
+      "split": "development",
+      "business": "Aster Components (fictional)",
+      "layout": "A",
+      "purpose": "conflicting period must prevent a usable normalized candidate",
+      "pages": [
+        {
+          "title": "Standalone profit and loss",
+          "context": [
+            "Years ended 31 March 2023 and 31 March 2022; full April-March years.",
+            "Amounts in INR rupees."
+          ],
+          "unit": "rupees",
+          "multiplier": "1",
+          "headers": [
+            "Particulars",
+            "Note",
+            "31 Mar 2025",
+            "31 Mar 2024"
+          ],
+          "rows": [
+            {
+              "field": "revenue",
+              "label": "Revenue from operations",
+              "note": "11",
+              "values": [
+                {
+                  "raw": "12000000.00",
+                  "year_start": null,
+                  "amount": "12000000.00",
+                  "normalized_inr": null,
+                  "issues": [
+                    "conflicting_period"
+                  ]
+                },
+                {
+                  "raw": "10000000.00",
+                  "year_start": null,
+                  "amount": "10000000.00",
+                  "normalized_inr": null,
+                  "issues": [
+                    "conflicting_period"
+                  ]
+                }
+              ]
+            },
+            {
+              "field": "profit_after_tax",
+              "label": "Profit after tax",
+              "note": "12",
+              "values": [
+                {
+                  "raw": "600000.00",
+                  "year_start": null,
+                  "amount": "600000.00",
+                  "normalized_inr": null,
+                  "issues": [
+                    "conflicting_period"
+                  ]
+                },
+                {
+                  "raw": "900000.00",
+                  "year_start": null,
+                  "amount": "900000.00",
+                  "normalized_inr": null,
+                  "issues": [
+                    "conflicting_period"
+                  ]
+                }
+              ]
+            },
+            {
+              "field": "ebit",
+              "label": "Earnings before interest and tax",
+              "note": "13",
+              "values": [
+                {
+                  "raw": "1200000.00",
+                  "year_start": null,
+                  "amount": "1200000.00",
+                  "normalized_inr": null,
+                  "issues": [
+                    "conflicting_period"
+                  ]
+                },
+                {
+                  "raw": "1500000.00",
+                  "year_start": null,
+                  "amount": "1500000.00",
+                  "normalized_inr": null,
+                  "issues": [
+                    "conflicting_period"
+                  ]
+                }
+              ]
+            },
+            {
+              "field": "interest_expense",
+              "label": "Interest expense",
+              "note": "14",
+              "values": [
+                {
+                  "raw": "400000.00",
+                  "year_start": null,
+                  "amount": "400000.00",
+                  "normalized_inr": null,
+                  "issues": [
+                    "conflicting_period"
+                  ]
+                },
+                {
+                  "raw": "300000.00",
+                  "year_start": null,
+                  "amount": "300000.00",
+                  "normalized_inr": null,
+                  "issues": [
+                    "conflicting_period"
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "sha256": "c3ff3f4ccdc442eeb7ebdd241676b0895b2ae7188994a6a041eeca2adc6b3f95"
+    },
+    {
+      "file": "aster-duplicates.pdf",
+      "split": "development",
+      "business": "Aster Components (fictional)",
+      "layout": "A",
+      "purpose": "Identical and conflicting duplicate rows remain unresolved",
+      "pages": [
+        {
+          "title": "Standalone profit and loss",
+          "context": [
+            "Years ended 31 March 2025 and 31 March 2024; full April-March years.",
+            "Amounts in INR rupees."
+          ],
+          "unit": "rupees",
+          "multiplier": "1",
+          "headers": [
+            "Particulars",
+            "Note",
+            "31 Mar 2025",
+            "31 Mar 2024"
+          ],
+          "rows": [
+            {
+              "field": "revenue",
+              "label": "Revenue from operations",
+              "note": "11",
+              "values": [
+                {
+                  "raw": "12000000.00",
+                  "year_start": 2024,
+                  "amount": "12000000.00",
+                  "normalized_inr": null,
+                  "issues": [
+                    "duplicate_match"
+                  ]
+                },
+                {
+                  "raw": "10000000.00",
+                  "year_start": 2023,
+                  "amount": "10000000.00",
+                  "normalized_inr": null,
+                  "issues": [
+                    "duplicate_match"
+                  ]
+                }
+              ]
+            },
+            {
+              "field": "profit_after_tax",
+              "label": "Profit after tax",
+              "note": "12",
+              "values": [
+                {
+                  "raw": "600000.00",
+                  "year_start": 2024,
+                  "amount": "600000.00",
+                  "normalized_inr": "600000.00",
+                  "issues": []
+                },
+                {
+                  "raw": "900000.00",
+                  "year_start": 2023,
+                  "amount": "900000.00",
+                  "normalized_inr": "900000.00",
+                  "issues": []
+                }
+              ]
+            },
+            {
+              "field": "ebit",
+              "label": "Earnings before interest and tax",
+              "note": "13",
+              "values": [
+                {
+                  "raw": "1200000.00",
+                  "year_start": 2024,
+                  "amount": "1200000.00",
+                  "normalized_inr": "1200000.00",
+                  "issues": []
+                },
+                {
+                  "raw": "1500000.00",
+                  "year_start": 2023,
+                  "amount": "1500000.00",
+                  "normalized_inr": "1500000.00",
+                  "issues": []
+                }
+              ]
+            },
+            {
+              "field": "interest_expense",
+              "label": "Interest expense",
+              "note": "14",
+              "values": [
+                {
+                  "raw": "400000.00",
+                  "year_start": 2024,
+                  "amount": "400000.00",
+                  "normalized_inr": null,
+                  "issues": [
+                    "conflicting_match"
+                  ]
+                },
+                {
+                  "raw": "300000.00",
+                  "year_start": 2023,
+                  "amount": "300000.00",
+                  "normalized_inr": null,
+                  "issues": [
+                    "conflicting_match"
+                  ]
+                }
+              ]
+            },
+            {
+              "field": "revenue",
+              "label": "Revenue from operations",
+              "note": "11",
+              "values": [
+                {
+                  "raw": "12000000.00",
+                  "year_start": 2024,
+                  "amount": "12000000.00",
+                  "normalized_inr": null,
+                  "issues": [
+                    "duplicate_match"
+                  ]
+                },
+                {
+                  "raw": "10000000.00",
+                  "year_start": 2023,
+                  "amount": "10000000.00",
+                  "normalized_inr": null,
+                  "issues": [
+                    "duplicate_match"
+                  ]
+                }
+              ]
+            },
+            {
+              "field": "interest_expense",
+              "label": "Interest expense",
+              "note": "14",
+              "values": [
+                {
+                  "raw": "450000.00",
+                  "year_start": 2024,
+                  "amount": "450000.00",
+                  "normalized_inr": null,
+                  "issues": [
+                    "conflicting_match"
+                  ]
+                },
+                {
+                  "raw": "300000.00",
+                  "year_start": 2023,
+                  "amount": "300000.00",
+                  "normalized_inr": null,
+                  "issues": [
+                    "conflicting_match"
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "sha256": "1afe42dfb05a6ddf298e7fc03e5d5fec73de4f34ebd9baf0bf00546e3516f02a"
+    },
+    {
+      "file": "aster-misleading-labels.pdf",
+      "split": "development",
+      "business": "Aster Components (fictional)",
+      "layout": "A",
+      "purpose": "Do not substitute total income, EBITDA or finance costs",
+      "pages": [
+        {
+          "title": "Standalone profit and loss",
+          "context": [
+            "Years ended 31 March 2025 and 31 March 2024; full April-March years.",
+            "Amounts in INR rupees."
+          ],
+          "unit": "rupees",
+          "multiplier": "1",
+          "headers": [
+            "Particulars",
+            "Note",
+            "31 Mar 2025",
+            "31 Mar 2024"
+          ],
+          "rows": [
+            {
+              "field": null,
+              "label": "Total income",
+              "note": "11",
+              "values": [
+                {
+                  "raw": "12000000.00",
+                  "year_start": 2024,
+                  "amount": "12000000.00",
+                  "normalized_inr": null,
+                  "issues": [
+                    "ambiguous_mapping"
+                  ]
+                },
+                {
+                  "raw": "10000000.00",
+                  "year_start": 2023,
+                  "amount": "10000000.00",
+                  "normalized_inr": null,
+                  "issues": [
+                    "ambiguous_mapping"
+                  ]
+                }
+              ]
+            },
+            {
+              "field": "profit_after_tax",
+              "label": "Profit after tax",
+              "note": "12",
+              "values": [
+                {
+                  "raw": "600000.00",
+                  "year_start": 2024,
+                  "amount": "600000.00",
+                  "normalized_inr": "600000.00",
+                  "issues": []
+                },
+                {
+                  "raw": "900000.00",
+                  "year_start": 2023,
+                  "amount": "900000.00",
+                  "normalized_inr": "900000.00",
+                  "issues": []
+                }
+              ]
+            },
+            {
+              "field": null,
+              "label": "EBITDA",
+              "note": "13",
+              "values": [
+                {
+                  "raw": "1200000.00",
+                  "year_start": 2024,
+                  "amount": "1200000.00",
+                  "normalized_inr": null,
+                  "issues": [
+                    "ambiguous_mapping"
+                  ]
+                },
+                {
+                  "raw": "1500000.00",
+                  "year_start": 2023,
+                  "amount": "1500000.00",
+                  "normalized_inr": null,
+                  "issues": [
+                    "ambiguous_mapping"
+                  ]
+                }
+              ]
+            },
+            {
+              "field": null,
+              "label": "Finance costs",
+              "note": "14",
+              "values": [
+                {
+                  "raw": "400000.00",
+                  "year_start": 2024,
+                  "amount": "400000.00",
+                  "normalized_inr": null,
+                  "issues": [
+                    "ambiguous_mapping"
+                  ]
+                },
+                {
+                  "raw": "300000.00",
+                  "year_start": 2023,
+                  "amount": "300000.00",
+                  "normalized_inr": null,
+                  "issues": [
+                    "ambiguous_mapping"
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "sha256": "e1baf72f6183585194a59b979b45c0699c1e20ac5518f91dfd9fbddbbe5e8631"
+    },
+    {
+      "file": "aster-invalid-amounts.pdf",
+      "split": "development",
+      "business": "Aster Components (fictional)",
+      "layout": "A",
+      "purpose": "Malformed grouping and precision cannot be silently normalized",
+      "pages": [
+        {
+          "title": "Standalone profit and loss",
+          "context": [
+            "Years ended 31 March 2025 and 31 March 2024; full April-March years.",
+            "Amounts in INR rupees."
+          ],
+          "unit": "rupees",
+          "multiplier": "1",
+          "headers": [
+            "Particulars",
+            "Note",
+            "31 Mar 2025",
+            "31 Mar 2024"
+          ],
+          "rows": [
+            {
+              "field": "revenue",
+              "label": "Revenue from operations",
+              "note": "11",
+              "values": [
+                {
+                  "raw": "1,20,0000.00",
+                  "year_start": 2024,
+                  "amount": null,
+                  "normalized_inr": null,
+                  "issues": [
+                    "invalid_amount"
+                  ]
+                },
+                {
+                  "raw": "10000000.00",
+                  "year_start": 2023,
+                  "amount": "10000000.00",
+                  "normalized_inr": "10000000.00",
+                  "issues": []
+                }
+              ]
+            },
+            {
+              "field": "profit_after_tax",
+              "label": "Profit after tax",
+              "note": "12",
+              "values": [
+                {
+                  "raw": "600000.123",
+                  "year_start": 2024,
+                  "amount": null,
+                  "normalized_inr": null,
+                  "issues": [
+                    "invalid_amount"
+                  ]
+                },
+                {
+                  "raw": "900000.00",
+                  "year_start": 2023,
+                  "amount": "900000.00",
+                  "normalized_inr": "900000.00",
+                  "issues": []
+                }
+              ]
+            },
+            {
+              "field": "ebit",
+              "label": "Earnings before interest and tax",
+              "note": "13",
+              "values": [
+                {
+                  "raw": "1e6",
+                  "year_start": 2024,
+                  "amount": null,
+                  "normalized_inr": null,
+                  "issues": [
+                    "invalid_amount"
+                  ]
+                },
+                {
+                  "raw": "1500000.00",
+                  "year_start": 2023,
+                  "amount": "1500000.00",
+                  "normalized_inr": "1500000.00",
+                  "issues": []
+                }
+              ]
+            },
+            {
+              "field": "interest_expense",
+              "label": "Interest expense",
+              "note": "14",
+              "values": [
+                {
+                  "raw": "400000.00",
+                  "year_start": 2024,
+                  "amount": "400000.00",
+                  "normalized_inr": "400000.00",
+                  "issues": []
+                },
+                {
+                  "raw": "300000.00",
+                  "year_start": 2023,
+                  "amount": "300000.00",
+                  "normalized_inr": "300000.00",
+                  "issues": []
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "sha256": "4999fafe144eb84a60e3bf56033e248267501b988fcdb69220714fa6d0c6f62f"
+    },
+    {
+      "file": "birch-held-out.pdf",
+      "split": "held_out",
+      "business": "Birch Fabrication (fictional)",
+      "layout": "B",
+      "purpose": "Reserved business/layout; do not tune extraction with this document",
+      "pages": [
+        {
+          "title": "Standalone profit and loss",
+          "context": [
+            "Years ended 31 March 2024 and 31 March 2025; full April-March years.",
+            "Amounts in INR lakhs."
+          ],
+          "unit": "lakhs",
+          "multiplier": "100000",
+          "headers": [
+            "Particulars",
+            "Note",
+            "31 Mar 2024",
+            "31 Mar 2025"
+          ],
+          "rows": [
+            {
+              "field": "ebit",
+              "label": "Earnings before interest and tax",
+              "note": "13",
+              "values": [
+                {
+                  "raw": "8.00",
+                  "year_start": 2023,
+                  "amount": "8.00",
+                  "normalized_inr": "800000.00",
+                  "issues": []
+                },
+                {
+                  "raw": "9.00",
+                  "year_start": 2024,
+                  "amount": "9.00",
+                  "normalized_inr": "900000.00",
+                  "issues": []
+                }
+              ]
+            },
+            {
+              "field": "profit_after_tax",
+              "label": "Profit after tax",
+              "note": "12",
+              "values": [
+                {
+                  "raw": "4.00",
+                  "year_start": 2023,
+                  "amount": "4.00",
+                  "normalized_inr": "400000.00",
+                  "issues": []
+                },
+                {
+                  "raw": "5.76",
+                  "year_start": 2024,
+                  "amount": "5.76",
+                  "normalized_inr": "576000.00",
+                  "issues": []
+                }
+              ]
+            },
+            {
+              "field": "revenue",
+              "label": "Revenue from operations",
+              "note": "11",
+              "values": [
+                {
+                  "raw": "80.00",
+                  "year_start": 2023,
+                  "amount": "80.00",
+                  "normalized_inr": "8000000.00",
+                  "issues": []
+                },
+                {
+                  "raw": "96.00",
+                  "year_start": 2024,
+                  "amount": "96.00",
+                  "normalized_inr": "9600000.00",
+                  "issues": []
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "title": "Standalone balance sheet",
+          "context": [
+            "Years ended 31 March 2024 and 31 March 2025; full April-March years.",
+            "Amounts in INR lakhs."
+          ],
+          "unit": "lakhs",
+          "multiplier": "100000",
+          "headers": [
+            "Particulars",
+            "Note",
+            "31 Mar 2024",
+            "31 Mar 2025"
+          ],
+          "rows": [
+            {
+              "field": "total_equity",
+              "label": "Total equity",
+              "note": "15",
+              "values": [
+                {
+                  "raw": "42.00",
+                  "year_start": 2023,
+                  "amount": "42.00",
+                  "normalized_inr": "4200000.00",
+                  "issues": []
+                },
+                {
+                  "raw": "48.00",
+                  "year_start": 2024,
+                  "amount": "48.00",
+                  "normalized_inr": "4800000.00",
+                  "issues": []
+                }
+              ]
+            },
+            {
+              "field": "total_liabilities",
+              "label": "Total liabilities excluding equity",
+              "note": "14",
+              "values": [
+                {
+                  "raw": "28.00",
+                  "year_start": 2023,
+                  "amount": "28.00",
+                  "normalized_inr": "2800000.00",
+                  "issues": []
+                },
+                {
+                  "raw": "32.00",
+                  "year_start": 2024,
+                  "amount": "32.00",
+                  "normalized_inr": "3200000.00",
+                  "issues": []
+                }
+              ]
+            },
+            {
+              "field": "total_assets",
+              "label": "Total assets",
+              "note": "13",
+              "values": [
+                {
+                  "raw": "70.00",
+                  "year_start": 2023,
+                  "amount": "70.00",
+                  "normalized_inr": "7000000.00",
+                  "issues": []
+                },
+                {
+                  "raw": "80.00",
+                  "year_start": 2024,
+                  "amount": "80.00",
+                  "normalized_inr": "8000000.00",
+                  "issues": []
+                }
+              ]
+            },
+            {
+              "field": "current_liabilities",
+              "label": "Total current liabilities",
+              "note": "12",
+              "values": [
+                {
+                  "raw": "15.00",
+                  "year_start": 2023,
+                  "amount": "15.00",
+                  "normalized_inr": "1500000.00",
+                  "issues": []
+                },
+                {
+                  "raw": "17.00",
+                  "year_start": 2024,
+                  "amount": "17.00",
+                  "normalized_inr": "1700000.00",
+                  "issues": []
+                }
+              ]
+            },
+            {
+              "field": "current_assets",
+              "label": "Total current assets",
+              "note": "11",
+              "values": [
+                {
+                  "raw": "30.00",
+                  "year_start": 2023,
+                  "amount": "30.00",
+                  "normalized_inr": "3000000.00",
+                  "issues": []
+                },
+                {
+                  "raw": "35.00",
+                  "year_start": 2024,
+                  "amount": "35.00",
+                  "normalized_inr": "3500000.00",
+                  "issues": []
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "title": "Standalone borrowing detail",
+          "context": [
+            "Years ended 31 March 2024 and 31 March 2025; full April-March years.",
+            "Amounts in INR lakhs."
+          ],
+          "unit": "lakhs",
+          "multiplier": "100000",
+          "headers": [
+            "Particulars",
+            "Note",
+            "31 Mar 2024",
+            "31 Mar 2025"
+          ],
+          "rows": [
+            {
+              "field": "long_term_borrowings",
+              "label": "Non-current borrowings",
+              "note": "12",
+              "values": [
+                {
+                  "raw": "8.00",
+                  "year_start": 2023,
+                  "amount": "8.00",
+                  "normalized_inr": "800000.00",
+                  "issues": []
+                },
+                {
+                  "raw": "9.00",
+                  "year_start": 2024,
+                  "amount": "9.00",
+                  "normalized_inr": "900000.00",
+                  "issues": []
+                }
+              ]
+            },
+            {
+              "field": "short_term_borrowings",
+              "label": "Short-term borrowings",
+              "note": "11",
+              "values": [
+                {
+                  "raw": "3.00",
+                  "year_start": 2023,
+                  "amount": "3.00",
+                  "normalized_inr": "300000.00",
+                  "issues": []
+                },
+                {
+                  "raw": "4.00",
+                  "year_start": 2024,
+                  "amount": "4.00",
+                  "normalized_inr": "400000.00",
+                  "issues": []
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "sha256": "b64897fd44d2f20a621b6975f98c908bbf0fc899db80e34cfa8e463d08e62eb4"
+    }
+  ]
+}
