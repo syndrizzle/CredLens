@@ -69,17 +69,25 @@ INDICATOR_KEYWORDS: dict[Indicator | str, tuple[str, ...]] = {
 OUT_OF_SCOPE_PATTERNS = (
     re.compile(r"\b(loan|credit|financing)\s+(approv|eligib|chances?|odds|probabilit|sanction|grant|reject)", re.I),
     re.compile(r"\b(will|would|can|should)\b.{0,40}\b(bank|lender|loan)\b.{0,30}\b(approv|grant|sanction|lend|accept|reject)", re.I),
+    re.compile(r"\b(good\s+enough|healthy\s+enough|strong\s+enough|qualif\w*|eligib\w*)\b.{0,40}\b(loan|bank|lender|financing|credit)\b", re.I),
     re.compile(r"\b(credit|default|cibil|risk)\s+(score|rating|grade|probabilit)", re.I),
     re.compile(r"\b(recommend|match|find|suggest)\b.{0,30}\b(bank|lender|nbfc|loan product)", re.I),
     re.compile(r"\b(authenticat|genuine|forged|fraud|verify\s+authenticity)\b", re.I),
     re.compile(r"\b(forecast|predict|project)\b.{0,40}\b(next\s+year|future|fy\s*20\d\d|revenue|profit|cash)", re.I),
 )
 
+MUTATION_EXEC_PATTERNS = (
+    re.compile(r"\b(execute|run)\s+(sql|code|python|shell|command|script|query)\b", re.I),
+    re.compile(r"\b(drop\s+table|delete\s+from|insert\s+into|alter\s+table|update\s+\w+\s+set)\b", re.I),
+    re.compile(r"\b(update|change|modify|overwrite|confirm|delete)\b.{0,30}\b(my\s+revenue|all\s+figures|database|workspace\s+records|entries\s+automatically)\b", re.I),
+)
+
 CAUSAL_PATTERN = re.compile(
-    r"\b(why\s+did|what\s+caused|cause\s+of|reason\s+for|explain\s+why)\b", re.I
+    r"\b(why\s+did|what\s+caused|cause[ds]?\b|cause\s+of|reason\s+for|explain\s+why|due\s+to|driven\s+by|because\s+of)\b",
+    re.I,
 )
 GAP_PATTERN = re.compile(
-    r"\b(missing|gap|block|unreview|confirm|next\s+step|prepare|preparation|action|need\s+to\s+do|incomplete|not\s+assessed|needs\s+review)\b",
+    r"\b(missing|gap|block|unreview|confirm|next\s+step|prepare|preparation|action|need\s+to\s+do|incomplete|not\s+assessed|needs\s+review|not\s+meaningful|conflict|mismatch|discrepanc|inconsisten)\b",
     re.I,
 )
 DOCUMENT_PATTERN = re.compile(
@@ -87,9 +95,15 @@ DOCUMENT_PATTERN = re.compile(
     re.I,
 )
 CITATION_TAG_RE = re.compile(r"\[([FD][1-9][0-9]*)\]")
-FORBIDDEN_LLM_VERDICT_RE = re.compile(
-    r"\b(loan\s+(is|will\s+be)\s+approved|credit\s+score\s*(is|:)\s*\d+|guaranteed\s+approval|recommend\s+approving\s+the\s+loan)\b",
+NEGATION_REFUSAL_RE = re.compile(
+    r"\b(cannot|can't|unable\s+to|does\s+not|do\s+not|don't|never|refuse|not\s+able|out\s+of\s+scope|will\s+not|won't|no\s+credit\s+score|not\s+predict|not\s+assign|not\s+guarantee|not\s+authenticate)\b",
     re.I,
+)
+FORBIDDEN_LLM_VERDICT_PATTERNS = (
+    re.compile(r"\b(loan\s+(is|will\s+be)\s+approved|approved\s+for\s+(the\s+)?loan|guaranteed\s+approval|recommend\s+approving\s+the\s+loan)\b", re.I),
+    re.compile(r"\b(credit|cibil|risk)\s+(score|rating)\s*(is|of|:)\s*(\d+|[A-D][+-]?|AAA|AA|BBB)\b", re.I),
+    re.compile(r"\bdefault\s+probability\s*(is|of|:)\s*\d+(\.\d+)?%", re.I),
+    re.compile(r"\b(statements?\s+(are|is)\s+(verified\s+as\s+)?authentic|authenticity\s+(is\s+)?confirmed)\b", re.I),
 )
 
 QA_SCOPE_LIMITATION = (
@@ -106,7 +120,8 @@ Rules you MUST follow:
 4. Keep evidence states distinct: Supported, Needs review, Not assessed, Not meaningful. Never treat missing or zero interest as infinite or favourable coverage. EBIT is not EBITDA.
 5. When an input is missing, unreviewed, or conflicting, name the exact missing/disputed item, name the affected analysis it blocks, and state the preparation next step without blocking unrelated supported indicators.
 6. Refuse requests for loan approval/eligibility predictions, credit or default scores, lender matching, statement authenticity guarantees, future forecasts, or unsupported root-cause claims (ratios alone do not prove why a figure changed).
-7. Keep answers concise, clear, plain-language, and structured."""
+7. Keep answers concise, clear, plain-language, and structured.
+8. You are strictly read-only: refuse requests to execute SQL, run code, or modify or confirm workspace figures."""
 
 
 class OllamaUnavailableError(RuntimeError):
@@ -377,6 +392,11 @@ def _read_ollama_config() -> OllamaConfig:
     )
 
 
+def _sanitize_untrusted_text(text: str) -> str:
+    # Neutralize angle brackets so untrusted PDF content cannot break out of prompt delimiters.
+    return text.replace("<", "[").replace(">", "]")
+
+
 def _build_user_prompt(
     context: QAContext,
     question: str,
@@ -385,7 +405,7 @@ def _build_user_prompt(
     year_start: int | None,
 ) -> str:
     lines = [
-        f"Business: {context.workspace.request.business_name} (INR, standalone, input revision {context.workspace.input_revision}, {context.analysis.rule_version})",
+        f"Business: {_sanitize_untrusted_text(context.workspace.request.business_name)} (INR, standalone, input revision {context.workspace.input_revision}, {context.analysis.rule_version})",
     ]
     if year_start is not None:
         present_years = {p.year_start for p in context.analysis.periods}
@@ -411,16 +431,21 @@ def _build_user_prompt(
     lines.append("\n<document_passages>")
     if document_citations:
         for doc in document_citations:
-            section = f", section={doc.section}" if doc.section else ""
+            safe_file = _sanitize_untrusted_text(doc.filename).replace('"', "'")
+            safe_section = (
+                f", section={_sanitize_untrusted_text(doc.section)}"
+                if doc.section
+                else ""
+            )
             periods = (
                 f", periods={','.join(_format_fy(y) for y in doc.period_years)}"
                 if doc.period_years
                 else ""
             )
             lines.append(
-                f'<untrusted_document_passage id="{doc.citation_id}" file="{doc.filename}" page="{doc.page_number}"{section}{periods}>'
+                f'<untrusted_document_passage id="{doc.citation_id}" file="{safe_file}" page="{doc.page_number}"{safe_section}{periods}>'
             )
-            lines.append(doc.excerpt)
+            lines.append(_sanitize_untrusted_text(doc.excerpt))
             lines.append("</untrusted_document_passage>")
     else:
         lines.append("No retrieved document passages available.")
@@ -500,6 +525,20 @@ def _is_out_of_scope(question: str) -> bool:
     return any(pattern.search(question) for pattern in OUT_OF_SCOPE_PATTERNS)
 
 
+def _is_mutation_or_exec_request(question: str) -> bool:
+    return any(pattern.search(question) for pattern in MUTATION_EXEC_PATTERNS)
+
+
+def _violates_output_guardrails(text: str) -> bool:
+    for sentence in re.split(r"(?<=[.!?])\s+|\n+", text):
+        stripped = sentence.strip()
+        if not stripped or NEGATION_REFUSAL_RE.search(stripped):
+            continue
+        if any(pattern.search(stripped) for pattern in FORBIDDEN_LLM_VERDICT_PATTERNS):
+            return True
+    return False
+
+
 def _match_indicators(question: str) -> list[str]:
     lowered = question.lower()
     matched: list[str] = []
@@ -570,6 +609,14 @@ def build_fallback_answer(
             f"Note: {_format_fy(year_start)} is not entered in this saved workspace (available saved periods: {available})."
         )
 
+    if _is_mutation_or_exec_request(question):
+        parts.append(
+            "CredLens Q&A is strictly read-only and cannot execute SQL, run arbitrary code, "
+            "modify saved financial figures, or confirm entries on your behalf. "
+            "Use the workspace review form to edit and confirm figures explicitly."
+        )
+        return "\n\n".join(parts)
+
     if _is_out_of_scope(question):
         parts.append(
             "CredLens cannot predict loan approval or eligibility, assign credit or default scores, "
@@ -605,7 +652,7 @@ def build_fallback_answer(
     else:
         selected_fin = [c for c in financial_citations if c.indicator != "balance_check"]
 
-    if asks_cause:
+    if asks_cause and not asks_gaps:
         parts.append(
             "Ratios and financial statement figures show observed values and changes, but do not establish root causes on their own. "
             "Review supporting expense schedules and records with your accountant before attributing a cause."
@@ -674,7 +721,7 @@ def answer_workspace_question(
 
     try:
         model_name, raw_answer = caller(SYSTEM_PROMPT, user_prompt)
-        if FORBIDDEN_LLM_VERDICT_RE.search(raw_answer):
+        if _violates_output_guardrails(raw_answer):
             raise OllamaUnavailableError(
                 "Model output violated CredLens lending/scoring guardrails; reverted to deterministic summary."
             )
