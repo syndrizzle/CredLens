@@ -37,6 +37,7 @@ from app.persistence import (
     save_business,
     update_business,
 )
+from app.qa import answer_workspace_question, load_qa_context
 from app.retrieval import EmbeddingUnavailableError, retrieve_passages
 from app.schemas import (
     AnalysisRequest,
@@ -46,6 +47,8 @@ from app.schemas import (
     CredentialsRequest,
     DocumentExtractionResponse,
     DocumentSummary,
+    QARequest,
+    QAResponse,
     RetrievalRequest,
     RetrievalResponse,
     SessionResponse,
@@ -412,3 +415,30 @@ def search_business_passages(
             raise HTTPException(status_code=404, detail=str(exc)) from None
         except EmbeddingUnavailableError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from None
+
+
+@app.post(
+    "/api/businesses/{business_id}/qa",
+    response_model=QAResponse,
+)
+def ask_business_question(
+    business_id: UUID, payload: QARequest, request: Request
+) -> QAResponse:
+    # Close DB transaction before local LLM inference so connections are never held idle.
+    with db_transaction() as connection:
+        session = require_session(connection, request)
+        try:
+            context = load_qa_context(
+                connection,
+                session.owner_id,
+                business_id,
+                payload.question,
+                top_k=payload.top_k,
+                year_start=payload.year_start,
+                document_id=payload.document_id,
+            )
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from None
+    return answer_workspace_question(
+        context, payload.question, year_start=payload.year_start
+    )

@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { AnalysisResults } from "../src/features/analysis/AnalysisResults";
+import { SourceReview } from "../src/features/documents/SourceReview";
+import { WorkspaceQA } from "../src/features/qa/WorkspaceQA";
 import {
   analysisRequest,
   displayDecimal,
@@ -567,8 +569,6 @@ test("document client uploads, retries, deletes, surfaces validation errors, and
 test("extraction client validates snapshots, runs extraction, and renders SourceReview + document-origin AnalysisResults", async () => {
   const { fetchDocumentExtraction, runDocumentExtraction } =
     await import("../src/features/analysis/api");
-  const { SourceReview } =
-    await import("../src/features/documents/SourceReview");
   const { formFromRequest } =
     await import("../src/features/manual-entry/model");
 
@@ -815,4 +815,111 @@ test("extraction client validates snapshots, runs extraction, and renders Source
   );
   expect(resultsHtml).toContain("Manual entry");
   expect(resultsHtml).toContain("Inputs and source origins");
+});
+
+test("Q&A client validates responses, enforces status errors, and WorkspaceQA renders citations", async () => {
+  const { askWorkspaceQuestion } = await import("../src/features/analysis/api");
+  const bizId = "11111111-1111-1111-1111-111111111111";
+  const docId = "dddddddd-dddd-dddd-dddd-dddddddddddd";
+  const chunkId = "cccccccc-cccc-cccc-cccc-cccccccccccc";
+  const validPayload = {
+    question: "Why did net profit margin change?",
+    answer:
+      "Net profit margin changed from 9.00% [F2] to 5.00% [F9]. Borrowings exclude leases [D1].",
+    mode: "fallback" as const,
+    model: null,
+    fallback_reason:
+      "Local explanation model (Ollama) is not reachable at the configured loopback address.",
+    retrieval_status: "ok" as const,
+    retrieval_note: null,
+    input_revision: 2,
+    rule_version: "financial-rules-v1" as const,
+    financial_citations: [
+      {
+        citation_id: "F2",
+        year_start: 2023,
+        indicator: "net_profit_margin" as const,
+        label: "Net profit margin",
+        state: "Supported" as const,
+        value_display: "9.00%",
+        summary: "Net profit margin (FY 2023-24): 9.00% [Supported].",
+        origins: ["revenue (FY 2023-24): 10000000 rupees, confirmed, Manual entry"],
+        reasons: [],
+        cited: true,
+      },
+    ],
+    document_citations: [
+      {
+        citation_id: "D1",
+        chunk_id: chunkId,
+        document_id: docId,
+        filename: "aster-reference.pdf",
+        page_number: 3,
+        section: "Note 4: Borrowings",
+        period_years: [2023, 2024],
+        excerpt: "Interest-bearing borrowings exclude lease liabilities.",
+        score: 0.78,
+        cited: true,
+      },
+    ],
+    limitations: [
+      "Q&A explains reviewed figures, deterministic Python outputs, and authorised document excerpts only.",
+    ],
+  };
+
+  let sentUrl = "";
+  let sentBody: Record<string, unknown> = {};
+  globalThis.fetch = (async (input, init) => {
+    sentUrl = String(input);
+    sentBody = JSON.parse(String(init?.body ?? "{}"));
+    return Response.json(validPayload);
+  }) as typeof fetch;
+
+  const result = await askWorkspaceQuestion(bizId, {
+    question: "Why did net profit margin change?",
+    year_start: 2024,
+  });
+  expect(sentUrl).toBe(`/api/businesses/${bizId}/qa`);
+  expect(sentBody).toEqual({
+    question: "Why did net profit margin change?",
+    year_start: 2024,
+  });
+  expect(result.mode).toBe("fallback");
+  expect(result.financial_citations[0]?.citation_id).toBe("F2");
+  expect(result.document_citations[0]?.page_number).toBe(3);
+
+  for (const [status, match] of [
+    [401, "session expired"],
+    [404, "not found"],
+    [422, "between 1 and 500"],
+    [503, "Q&A service is unavailable"],
+  ] as const) {
+    respond({}, status);
+    await expect(
+      askWorkspaceQuestion(bizId, { question: "Check margin" }),
+    ).rejects.toThrow(match);
+  }
+
+  // Malformed citation ID is rejected by runtime guard.
+  respond({
+    ...validPayload,
+    financial_citations: [{ ...validPayload.financial_citations[0], citation_id: "BAD" }],
+  });
+  await expect(
+    askWorkspaceQuestion(bizId, { question: "Check margin" }),
+  ).rejects.toThrow("invalid Q&A payload");
+
+  const qaHtml = renderToStaticMarkup(
+    <WorkspaceQA
+      businessId={bizId}
+      businessName="Aster Components (fictional)"
+      inputRevision={2}
+      years={[2023, 2024]}
+      hasReadyDocuments={true}
+      hasUnsavedChanges={true}
+    />,
+  );
+  expect(qaHtml).toContain("Evidence-grounded Q&amp;A");
+  expect(qaHtml).toContain("Unsaved edits present");
+  expect(qaHtml).toContain("borrowing notes");
 });

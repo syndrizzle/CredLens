@@ -25,6 +25,7 @@ import {
 } from "../analysis/api";
 import { useAnalysis } from "../analysis/use-analysis";
 import { SourceReview, type HighlightedCell } from "../documents/SourceReview";
+import { WorkspaceQA } from "../qa/WorkspaceQA";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
@@ -1485,6 +1486,23 @@ function ManualEntry() {
             businessId={savedClean ? activeWorkspace.id : undefined}
             inputRevision={savedClean ? activeWorkspace.revision : undefined}
             runs={savedClean ? activeWorkspace.runs : undefined}
+          />
+        ) : null}
+
+        {activeWorkspace ? (
+          <WorkspaceQA
+            key={activeWorkspace.id}
+            businessId={activeWorkspace.id}
+            businessName={activeWorkspace.form.businessName}
+            inputRevision={activeWorkspace.revision}
+            years={sortedPeriods(activeWorkspace.form.periods).map(
+              (period) => period.yearStart,
+            )}
+            hasReadyDocuments={activeWorkspace.documents.some(
+              (doc) => doc.status === "ready",
+            )}
+            hasUnsavedChanges={!savedClean}
+            disabled={workspaceBusy || analysis.loading}
           />
         ) : null}
 

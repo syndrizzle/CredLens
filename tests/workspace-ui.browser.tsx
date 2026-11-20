@@ -38,6 +38,7 @@ const workspace = (id: string, businessName: string) => ({
 let pending = deferred();
 let analysisPending = deferred();
 let docPending = deferred();
+let qaPending = deferred();
 const restoration = deferred();
 let logoutFailure: "http" | "network" | null = "http";
 const calls: string[] = [];
@@ -52,6 +53,7 @@ globalThis.fetch = async (input, options) => {
   if (path === "/api/businesses" && options?.method !== "POST") {
     return Response.json(["a", "b"].map(id => ({ id, business_name: `Business ${id}`, input_revision: 1 })));
   }
+  if (path.endsWith("/qa")) return qaPending.promise;
   if (path.includes("/documents")) return docPending.promise;
   return path.endsWith("/analysis") ? analysisPending.promise : pending.promise;
 };
@@ -295,7 +297,44 @@ async function run() {
   check(name().value === "Edited after analysis", "Update-and-analyse keeps submitted entries");
   check(text().includes("Saved revision 2 supersedes earlier analysis runs"), "Superseded status shown when saved revision has no current analysis");
 
+  // P4-03 focused Q&A checks on saved workspace
+  const qaInput = document.querySelector<HTMLInputElement>("#qa-question")!;
+  check(Boolean(qaInput) && !qaInput.matches(":disabled"), "Saved clean workspace enables Q&A input");
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(qaInput, "Why did net profit margin change?");
+    qaInput.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  qaPending = deferred();
+  await click(button("Ask question"));
+  check(calls.includes("POST /api/businesses/a/qa"), "Ask question posts to workspace Q&A endpoint");
+  check(qaInput.matches(":disabled"), "Q&A input locks while assembling answer");
+  await act(async () => qaPending.resolve(Response.json({
+    question: "Why did net profit margin change?",
+    answer: "Deterministic summary: net profit margin moved from 9.00% [F2] to 5.00% [F9]. Borrowings exclude leases [D1].",
+    mode: "fallback",
+    model: null,
+    fallback_reason: "Local explanation model (Ollama) is not reachable at the configured loopback address.",
+    retrieval_status: "ok",
+    retrieval_note: null,
+    input_revision: 2,
+    rule_version: "financial-rules-v1",
+    financial_citations: [{
+      citation_id: "F2", year_start: 2023, indicator: "net_profit_margin", label: "Net profit margin",
+      state: "Supported", value_display: "9.00%", summary: "Net profit margin (FY 2023-24): 9.00% [Supported].",
+      origins: ["revenue (FY 2023-24): 10000000 rupees, confirmed, Manual entry"], reasons: [], cited: true,
+    }],
+    document_citations: [{
+      citation_id: "D1", chunk_id: "c1", document_id: "doc-1", filename: "Aster_FY24.pdf",
+      page_number: 3, section: "Note 4: Borrowings", period_years: [2023, 2024],
+      excerpt: "Interest-bearing borrowings exclude lease liabilities.", score: 0.78, cited: true,
+    }],
+    limitations: ["Q&A explains reviewed figures and authorised excerpts only."],
+  })));
+  check(text().includes("Template fallback") && text().includes("Local explanation model unavailable"), "Q&A shows explicit fallback badge and reason");
+  check(text().includes("[F2]") && text().includes("9.00%") && text().includes("[D1]") && Boolean(document.querySelector('a[href="/api/businesses/a/documents/doc-1/file#page=3"]')), "Q&A renders verified financial and page-linked document citations");
+
   await rename("Draft with revision conflict");
+  check(text().includes("Unsaved edits present") && document.querySelector<HTMLInputElement>("#qa-question")!.matches(":disabled"), "Unsaved edits disable Q&A until saved");
   pending = deferred();
   await click(button("Save workspace"));
   await act(async () => pending.resolve(Response.json({ detail: "Workspace has been updated in another session; reload before saving" }, { status: 409 })));

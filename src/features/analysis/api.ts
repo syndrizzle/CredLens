@@ -149,6 +149,44 @@ export type WorkspaceResponse = {
   runs?: AnalysisRunSummary[];
   documents?: DocumentSummary[];
 };
+export type FinancialCitation = {
+  citation_id: string;
+  year_start: number;
+  indicator: Indicator | "balance_check";
+  label: string;
+  state: EvidenceState;
+  value_display: string | null;
+  summary: string;
+  origins: string[];
+  reasons: string[];
+  cited: boolean;
+};
+export type DocumentCitation = {
+  citation_id: string;
+  chunk_id: string;
+  document_id: string;
+  filename: string;
+  page_number: number;
+  section: string | null;
+  period_years: number[];
+  excerpt: string;
+  score: number;
+  cited: boolean;
+};
+export type QAResponse = {
+  question: string;
+  answer: string;
+  mode: "ollama" | "fallback";
+  model: string | null;
+  fallback_reason: string | null;
+  retrieval_status: "ok" | "no_documents" | "unavailable";
+  retrieval_note: string | null;
+  input_revision: number;
+  rule_version: "financial-rules-v1";
+  financial_citations: FinancialCitation[];
+  document_citations: DocumentCitation[];
+  limitations: string[];
+};
 
 export function documentFileUrl(businessId: string, documentId: string, pageNumber?: number): string {
   const base = `/api/businesses/${encodeURIComponent(businessId)}/documents/${encodeURIComponent(documentId)}/file`;
@@ -316,6 +354,34 @@ export async function deleteDocument(businessId: string, documentId: string): Pr
   }
 }
 
+export async function askWorkspaceQuestion(
+  businessId: string,
+  params: { question: string; year_start?: number | null; document_id?: string | null; top_k?: number },
+  signal?: AbortSignal,
+): Promise<QAResponse> {
+  const timeout = AbortSignal.timeout(45000);
+  const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
+  const response = await fetch(`/api/businesses/${encodeURIComponent(businessId)}/qa`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+    signal: combined,
+    body: JSON.stringify({
+      question: params.question,
+      ...(params.year_start != null ? { year_start: params.year_start } : {}),
+      ...(params.document_id != null ? { document_id: params.document_id } : {}),
+      ...(params.top_k != null ? { top_k: params.top_k } : {}),
+    }),
+  });
+  if (response.status === 401) throw new Error("Your session expired. Sign in again.");
+  if (response.status === 404) throw new Error("Workspace or document not found.");
+  if (response.status === 422) throw new Error("Enter a question between 1 and 500 characters.");
+  if (!response.ok) throw new Error("Q&A service is unavailable. Check that the local backend is running, then retry.");
+  const body: unknown = await response.json();
+  if (!validQAResponse(body)) throw new Error("The server returned an invalid Q&A payload.");
+  return body;
+}
+
 async function extractDocumentError(response: Response): Promise<string | null> {
   try {
     const body: unknown = await response.json();
@@ -471,6 +537,47 @@ function validExtractionResponse(value: unknown): value is DocumentExtractionRes
   if (!(raw.extraction_message === null || typeof raw.extraction_message === "string")) return false;
   if (raw.extraction_status === "ready") return validExtractionSnapshot(raw.extraction);
   return raw.extraction === null;
+}
+function validFinancialCitation(value: unknown): value is FinancialCitation {
+  return record(value) &&
+    typeof value.citation_id === "string" && /^F[1-9][0-9]*$/.test(value.citation_id) &&
+    Number.isInteger(value.year_start) &&
+    (value.indicator === "balance_check" || (typeof value.indicator === "string" && Object.hasOwn(INDICATORS, value.indicator))) &&
+    typeof value.label === "string" && value.label.length > 0 &&
+    state(value.state) &&
+    (value.value_display === null || typeof value.value_display === "string") &&
+    typeof value.summary === "string" && value.summary.length > 0 &&
+    Array.isArray(value.origins) && value.origins.every(item => typeof item === "string") &&
+    Array.isArray(value.reasons) && value.reasons.every(item => typeof item === "string") &&
+    typeof value.cited === "boolean";
+}
+function validDocumentCitation(value: unknown): value is DocumentCitation {
+  return record(value) &&
+    typeof value.citation_id === "string" && /^D[1-9][0-9]*$/.test(value.citation_id) &&
+    typeof value.chunk_id === "string" && value.chunk_id.length > 0 &&
+    typeof value.document_id === "string" && value.document_id.length > 0 &&
+    typeof value.filename === "string" && value.filename.length > 0 &&
+    Number.isInteger(value.page_number) && Number(value.page_number) >= 1 && Number(value.page_number) <= 50 &&
+    (value.section === null || typeof value.section === "string") &&
+    Array.isArray(value.period_years) && value.period_years.every(y => Number.isInteger(y)) &&
+    typeof value.excerpt === "string" && value.excerpt.length > 0 &&
+    typeof value.score === "number" && Number.isFinite(value.score) &&
+    typeof value.cited === "boolean";
+}
+function validQAResponse(value: unknown): value is QAResponse {
+  return record(value) &&
+    typeof value.question === "string" && value.question.length > 0 &&
+    typeof value.answer === "string" && value.answer.length > 0 &&
+    (value.mode === "ollama" || value.mode === "fallback") &&
+    (value.model === null || typeof value.model === "string") &&
+    (value.fallback_reason === null || typeof value.fallback_reason === "string") &&
+    ["ok", "no_documents", "unavailable"].includes(value.retrieval_status as string) &&
+    (value.retrieval_note === null || typeof value.retrieval_note === "string") &&
+    Number.isInteger(value.input_revision) && Number(value.input_revision) > 0 &&
+    value.rule_version === "financial-rules-v1" &&
+    Array.isArray(value.financial_citations) && value.financial_citations.every(validFinancialCitation) &&
+    Array.isArray(value.document_citations) && value.document_citations.every(validDocumentCitation) &&
+    Array.isArray(value.limitations) && value.limitations.every(item => typeof item === "string");
 }
 function validWorkspace(value: unknown): value is WorkspaceResponse {
   if (!record(value) || typeof value.business_id !== "string" || !Number.isInteger(value.input_revision) || !validRequest(value.request) || !validRuns(value.runs) || !validDocuments(value.documents)) return false;
