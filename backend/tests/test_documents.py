@@ -395,3 +395,176 @@ service.upload_and_process_document(get_engine(), UUID(sys.argv[1]), UUID(sys.ar
             ).status_code
             == 404
         )
+
+    def test_extraction_snapshot_lifecycle_legacy_upgrade_and_financial_non_interference(
+        self, workspace, env, monkeypatch
+    ):
+        import app.documents as service
+        from app.documents import extract_ready_document, get_document_extraction
+        from app.persistence import save_analysis
+
+        engine, _, owner, other, business, second = workspace
+        aster_pdf = (Path(__file__).parent / "fixtures" / "pdf_corpus" / "aster-reference.pdf").read_bytes()
+
+        with engine.begin() as c:
+            run_before = save_analysis(c, owner, business)
+            ws_before = load_workspace(c, owner, business)
+
+        original = service.inspect_pdf_file
+
+        def observe_processing(path):
+            with engine.begin() as c:
+                docs = list_documents(c, owner, business)
+                assert len(docs) == 1 and docs[0].status == "processing"
+                ext_during = get_document_extraction(c, owner, business, docs[0].id)
+                assert ext_during.extraction_status == "processing"
+                assert ext_during.extraction is None
+            # Unknown/cross-business/other-owner IDs still return LookupError (404) before busy 409.
+            with pytest.raises(LookupError):
+                extract_ready_document(engine, owner, second, docs[0].id)
+            with pytest.raises(LookupError):
+                extract_ready_document(engine, other, business, docs[0].id)
+            with pytest.raises(LookupError):
+                extract_ready_document(engine, owner, business, uuid4())
+            return original(path)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(service, "inspect_pdf_file", observe_processing)
+            doc = upload_and_process_document(
+                engine, owner, business, "aster-reference.pdf", "application/pdf", io.BytesIO(aster_pdf)
+            )
+
+        assert doc.status == "ready" and doc.page_count == 3
+        with engine.begin() as c:
+            ext_ready = get_document_extraction(c, owner, business, doc.id)
+            assert ext_ready.extraction_status == "ready"
+            assert ext_ready.extraction_message is None
+            assert ext_ready.extraction is not None
+            assert ext_ready.extraction.layout == "layout_a"
+            assert len(ext_ready.extraction.candidates) == 24
+            assert all(not cand.reviewed for cand in ext_ready.extraction.candidates)
+            # Listings and workspace summaries must never embed full source text or extraction JSON.
+            summary_dump = list_documents(c, owner, business)[0].model_dump()
+            ws_after = load_workspace(c, owner, business)
+            assert "extraction" not in summary_dump
+            assert "pages" not in summary_dump
+            assert "candidates" not in summary_dump
+            # Financial figures, periods, input_revision, and analysis runs must remain untouched.
+            assert ws_after.input_revision == ws_before.input_revision == 1
+            assert ws_after.latest_run_id == run_before
+            assert ws_after.request == ws_before.request
+            for bad_owner, bad_business in [(other, business), (owner, second)]:
+                with pytest.raises(LookupError):
+                    get_document_extraction(c, bad_owner, bad_business, doc.id)
+
+        # Simulate a legacy pre-P3-02 ready document (status='ready', extraction=None).
+        with engine.begin() as c:
+            c.execute(documents.update().where(documents.c.id == doc.id).values(extraction=None))
+            legacy_ext = get_document_extraction(c, owner, business, doc.id)
+            assert legacy_ext.status == "ready"
+            assert legacy_ext.extraction_status == "not_extracted"
+            assert legacy_ext.extraction is None
+            assert get_document_file(c, owner, business, doc.id)[1].read_bytes() == aster_pdf
+
+        # Legacy ready document cannot use failed-document retry, but can use extract_ready_document.
+        with pytest.raises(DocumentRejectError) as exc_info:
+            retry_document_processing(engine, owner, business, doc.id)
+        assert exc_info.value.status_code == 409 and exc_info.value.code == "not_retryable"
+
+        re_extracted = extract_ready_document(engine, owner, business, doc.id)
+        assert re_extracted.extraction_status == "ready"
+        assert re_extracted.extraction is not None
+        assert len(re_extracted.extraction.candidates) == 24
+
+        # Failed re-extraction transitions to failed without exposing the prior snapshot while failed,
+        # and preserves the prior snapshot row column until a subsequent retry succeeds.
+        with monkeypatch.context() as patch:
+            def timeout_worker(_path):
+                raise DocumentRejectError(422, "parser_timeout", "Timed out")
+            patch.setattr(service, "inspect_pdf_file", timeout_worker)
+            failed_ext = extract_ready_document(engine, owner, business, doc.id)
+        assert failed_ext.status == "failed"
+        assert failed_ext.extraction_status == "failed"
+        assert failed_ext.extraction is None
+        with engine.begin() as c:
+            stored_row = c.execute(select(documents.c.extraction).where(documents.c.id == doc.id)).scalar_one()
+            assert stored_row is not None
+            assert get_document_extraction(c, owner, business, doc.id).extraction is None
+        # extract_ready_document rejects non-ready documents with 409 document_not_ready.
+        with pytest.raises(DocumentRejectError) as exc_info:
+            extract_ready_document(engine, owner, business, doc.id)
+        assert exc_info.value.status_code == 409 and exc_info.value.code == "document_not_ready"
+
+        # Retry restores ready status and exposes the refreshed extraction snapshot.
+        assert retry_document_processing(engine, owner, business, doc.id).status == "ready"
+        with engine.begin() as c:
+            assert get_document_extraction(c, owner, business, doc.id).extraction_status == "ready"
+
+        # Pending removal exposes no snapshot, and final deletion removes the row and snapshot.
+        with monkeypatch.context() as patch:
+            def fail_unlink(_path):
+                raise PermissionError("locked")
+            patch.setattr(service, "_remove_file_and_empty_dirs", fail_unlink)
+            with pytest.raises(DocumentRejectError):
+                delete_document(engine, owner, business, doc.id)
+        with engine.begin() as c:
+            pending_ext = get_document_extraction(c, owner, business, doc.id)
+            assert pending_ext.extraction_status == "deletion_pending"
+            assert pending_ext.extraction is None
+        with pytest.raises(DocumentRejectError) as exc_info:
+            extract_ready_document(engine, owner, business, doc.id)
+        assert exc_info.value.status_code == 409 and exc_info.value.code == "document_not_ready"
+
+        delete_document(engine, owner, business, doc.id)
+        with engine.begin() as c:
+            with pytest.raises(LookupError):
+                get_document_extraction(c, owner, business, doc.id)
+
+        # HTTP endpoint verification for GET .../extraction and POST .../extract.
+        client_a = TestClient(app)
+        reg_a = client_a.post(
+            "/api/auth/register",
+            json={"email": f"ext-a-{uuid4().hex[:8]}@example.com", "password": "correct-horse-battery"},
+        )
+        assert reg_a.status_code == 201
+        env[3].append(reg_a.json()["owner_id"])
+        ws_res = client_a.post("/api/businesses", json=env[2].model_dump(mode="json"))
+        assert ws_res.status_code == 201
+        biz_a = ws_res.json()["business_id"]
+
+        up_res = client_a.post(
+            f"/api/businesses/{biz_a}/documents",
+            files={"file": ("aster-reference.pdf", aster_pdf, "application/pdf")},
+        )
+        assert up_res.status_code == 201
+        doc_a = up_res.json()["id"]
+
+        anon = TestClient(app)
+        assert anon.get(f"/api/businesses/{biz_a}/documents/{doc_a}/extraction").status_code == 401
+        assert anon.post(f"/api/businesses/{biz_a}/documents/{doc_a}/extract").status_code == 401
+        assert anon.post(f"/api/businesses/{biz_a}/documents/{doc_a}/extraction").status_code == 401
+
+        get_ext = client_a.get(f"/api/businesses/{biz_a}/documents/{doc_a}/extraction")
+        assert get_ext.status_code == 200
+        assert get_ext.json()["extraction_status"] == "ready"
+        assert len(get_ext.json()["extraction"]["candidates"]) == 24
+
+        client_b = TestClient(app)
+        reg_b = client_b.post(
+            "/api/auth/register",
+            json={"email": f"ext-b-{uuid4().hex[:8]}@example.com", "password": "correct-horse-battery"},
+        )
+        assert reg_b.status_code == 201
+        env[3].append(reg_b.json()["owner_id"])
+        assert client_b.get(f"/api/businesses/{biz_a}/documents/{doc_a}/extraction").status_code == 404
+        assert client_b.post(f"/api/businesses/{biz_a}/documents/{doc_a}/extract").status_code == 404
+        assert client_b.post(f"/api/businesses/{biz_a}/documents/{doc_a}/extraction").status_code == 404
+
+        with engine.begin() as c:
+            c.execute(documents.update().where(documents.c.id == doc_a).values(extraction=None))
+        assert client_a.get(f"/api/businesses/{biz_a}/documents/{doc_a}/extraction").json()["extraction_status"] == "not_extracted"
+        post_ext = client_a.post(f"/api/businesses/{biz_a}/documents/{doc_a}/extract")
+        assert post_ext.status_code == 200
+        assert post_ext.json()["extraction_status"] == "ready"
+        assert len(post_ext.json()["extraction"]["candidates"]) == 24
+        assert client_a.delete(f"/api/businesses/{biz_a}/documents/{doc_a}").status_code == 200

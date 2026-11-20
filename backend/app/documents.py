@@ -15,8 +15,19 @@ from sqlalchemy import func, select
 from sqlalchemy.engine import Connection, Engine
 
 from app.models import businesses, documents
-from app.pdf_limits import MAX_PDF_BYTES, MAX_PDF_PAGES, WALL_SECONDS
-from app.schemas import DocumentSummary
+from app.pdf_limits import (
+    MAX_PDF_BYTES,
+    MAX_PDF_PAGES,
+    MAX_TEXT_CHARS,
+    MAX_WORKER_STDOUT_BYTES,
+    WALL_SECONDS,
+)
+from app.pdf_worker import PdfInspectionResult
+from app.schemas import (
+    DocumentExtractionResponse,
+    DocumentExtractionSnapshot,
+    DocumentSummary,
+)
 
 READ_CHUNK_BYTES = 64 * 1024
 ALLOWED_CONTENT_TYPES = {"", "application/pdf", "application/x-pdf", "application/octet-stream", "binary/octet-stream"}
@@ -109,7 +120,7 @@ def read_bounded_upload(stream: BinaryIO, content_type: str | None) -> bytes:
     return data
 
 
-def inspect_pdf_file(path: Path) -> tuple[int, int]:
+def inspect_pdf_file(path: Path) -> PdfInspectionResult:
     env = {key: value for key, value in os.environ.items()
            if key in {"PATH", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "LANG", "LC_ALL"}}
     try:
@@ -122,24 +133,37 @@ def inspect_pdf_file(path: Path) -> tuple[int, int]:
         raise DocumentRejectError(422, "parser_timeout", PDF_ERRORS["parser_timeout"]) from None
     except OSError:
         raise DocumentRejectError(503, "parser_unavailable", PDF_ERRORS["parser_unavailable"]) from None
-    if result.returncode:
+    if result.returncode or len(result.stdout) > MAX_WORKER_STDOUT_BYTES:
         raise DocumentRejectError(422, "parser_resource_limit", PDF_ERRORS["parser_resource_limit"])
     try:
         body = json.loads(result.stdout)
+        if not isinstance(body, dict):
+            raise ValueError
         if "error" in body:
             code = body["error"]
             if code not in PDF_ERRORS:
                 raise ValueError
             raise DocumentRejectError(422, code, PDF_ERRORS[code])
-        pages, chars = body["pages"], body["chars"]
-        if type(pages) is not int or not 1 <= pages <= MAX_PDF_PAGES or type(chars) is not int or chars <= 0:
+        pages, chars, raw_extraction = body["pages"], body["chars"], body["extraction"]
+        if (
+            type(pages) is not int
+            or not 1 <= pages <= MAX_PDF_PAGES
+            or type(chars) is not int
+            or not 1 <= chars <= MAX_TEXT_CHARS
+            or not isinstance(raw_extraction, dict)
+        ):
             raise ValueError
-        return pages, chars
-    except (ValueError, KeyError, TypeError):
+        snapshot = DocumentExtractionSnapshot.model_validate(raw_extraction)
+        if snapshot.page_count != pages or snapshot.extracted_char_count != chars:
+            raise ValueError
+        return PdfInspectionResult(pages, chars, snapshot.model_dump(mode="json"))
+    except DocumentRejectError:
+        raise
+    except Exception:
         raise DocumentRejectError(503, "parser_unavailable", PDF_ERRORS["parser_unavailable"]) from None
 
 
-def inspect_pdf_bytes(data: bytes) -> tuple[int, int]:
+def inspect_pdf_bytes(data: bytes) -> PdfInspectionResult:
     data = read_bounded_upload(io.BytesIO(data), "application/pdf")
     with tempfile.TemporaryDirectory(prefix="credlens-pdf-") as directory:
         path = Path(directory) / "input.pdf"
@@ -193,6 +217,54 @@ def _row_to_summary(row) -> DocumentSummary:
     return DocumentSummary(**{key: row[key] for key in DocumentSummary.model_fields})
 
 
+def _row_to_extraction_response(row) -> DocumentExtractionResponse:
+    base = {key: row[key] for key in DocumentSummary.model_fields}
+    status = row["status"]
+    if status == "processing":
+        return DocumentExtractionResponse(
+            **base,
+            extraction_status="processing",
+            extraction_message="PDF processing is in progress. Refresh status after it completes.",
+            extraction=None,
+        )
+    if status == "failed":
+        if row["error_code"] == "deletion_pending":
+            return DocumentExtractionResponse(
+                **base,
+                extraction_status="deletion_pending",
+                extraction_message=row["error_message"],
+                extraction=None,
+            )
+        return DocumentExtractionResponse(
+            **base,
+            extraction_status="failed",
+            extraction_message=row["error_message"],
+            extraction=None,
+        )
+    raw_extraction = row.get("extraction")
+    if raw_extraction is None:
+        return DocumentExtractionResponse(
+            **base,
+            extraction_status="not_extracted",
+            extraction_message="Document was uploaded before candidate extraction. Run extraction to inspect source pages and candidates.",
+            extraction=None,
+        )
+    snapshot = DocumentExtractionSnapshot.model_validate(raw_extraction)
+    usable = sum(1 for candidate in snapshot.candidates if candidate.normalized_inr is not None and not candidate.issues)
+    if snapshot.layout == "unsupported" or not snapshot.candidates:
+        message = "No supported financial table layout was recognized. Enter or confirm figures manually."
+    elif usable == 0:
+        message = "Candidates have unresolved extraction issues. Inspect source rows or enter figures manually."
+    else:
+        message = None
+    return DocumentExtractionResponse(
+        **base,
+        extraction_status="ready",
+        extraction_message=message,
+        extraction=snapshot,
+    )
+
+
 def _owned_document(connection: Connection, owner_id: UUID, business_id: UUID, document_id: UUID):
     _ensure_owned_business(connection, owner_id, business_id)
     row = connection.execute(select(documents).where(documents.c.id == document_id,
@@ -239,11 +311,38 @@ def _finish_processing(engine: Engine, document_id: UUID, path: Path) -> Documen
     try:
         if not path.is_file():
             raise DocumentRejectError(422, "missing_storage_file", "Stored PDF is unavailable. Remove and re-upload it.")
-        pages, chars = inspect_pdf_file(path)
-        values = dict(status="ready", page_count=pages, extracted_char_count=chars, error_code=None, error_message=None)
+        inspected = inspect_pdf_file(path)
+        pages, chars = inspected
+        raw_extraction = getattr(inspected, "extraction", None)
+        if not isinstance(raw_extraction, dict):
+            raise DocumentRejectError(503, "parser_unavailable", PDF_ERRORS["parser_unavailable"])
+        try:
+            snapshot = DocumentExtractionSnapshot.model_validate(raw_extraction)
+        except Exception:
+            raise DocumentRejectError(503, "parser_unavailable", PDF_ERRORS["parser_unavailable"]) from None
+        if snapshot.page_count != pages or snapshot.extracted_char_count != chars:
+            raise DocumentRejectError(503, "parser_unavailable", PDF_ERRORS["parser_unavailable"])
+        values = dict(
+            status="ready",
+            page_count=pages,
+            extracted_char_count=chars,
+            extraction=snapshot.model_dump(mode="json"),
+            error_code=None,
+            error_message=None,
+        )
     except DocumentRejectError as exc:
         values = dict(status="failed", page_count=None, extracted_char_count=None, error_code=exc.code, error_message=exc.message)
     with engine.begin() as connection:
+        if values["status"] == "ready":
+            stored_sha = connection.execute(select(documents.c.sha256).where(documents.c.id == document_id)).scalar_one()
+            if values["extraction"]["document_sha256"] != stored_sha:
+                values = dict(
+                    status="failed",
+                    page_count=None,
+                    extracted_char_count=None,
+                    error_code="corrupted_pdf",
+                    error_message=PDF_ERRORS["corrupted_pdf"],
+                )
         row = connection.execute(documents.update().where(documents.c.id == document_id)
             .values(**values, updated_at=func.now()).returning(documents)).mappings().one()
         summary = _row_to_summary(row)
@@ -282,6 +381,31 @@ def retry_document_processing(engine: Engine, owner_id: UUID, business_id: UUID,
             connection.execute(documents.update().where(documents.c.id == document_id)
                 .values(status="processing", page_count=None, extracted_char_count=None, error_code=None, error_message=None, updated_at=func.now()))
         return _finish_processing(engine, document_id, document_file_path(owner_id, business_id, document_id))
+
+
+def get_document_extraction(connection: Connection, owner_id: UUID, business_id: UUID, document_id: UUID) -> DocumentExtractionResponse:
+    _owned_document(connection, owner_id, business_id, document_id)
+    reconcile_interrupted_documents(connection, owner_id, business_id)
+    row = _owned_document(connection, owner_id, business_id, document_id)
+    return _row_to_extraction_response(row)
+
+
+def extract_ready_document(engine: Engine, owner_id: UUID, business_id: UUID, document_id: UUID) -> DocumentExtractionResponse:
+    with _document_job(engine, owner_id, business_id, document_id):
+        with engine.begin() as connection:
+            row = _owned_document(connection, owner_id, business_id, document_id)
+            if row["status"] != "ready":
+                raise DocumentRejectError(
+                    409,
+                    "document_not_ready",
+                    "Document must be ready before running extraction; retry failed processing first.",
+                )
+            connection.execute(documents.update().where(documents.c.id == document_id)
+                .values(status="processing", page_count=None, extracted_char_count=None, error_code=None, error_message=None, updated_at=func.now()))
+        _finish_processing(engine, document_id, document_file_path(owner_id, business_id, document_id))
+        with engine.begin() as connection:
+            row = _owned_document(connection, owner_id, business_id, document_id)
+            return _row_to_extraction_response(row)
 
 
 def get_document_file(connection: Connection, owner_id: UUID, business_id: UUID, document_id: UUID) -> tuple[DocumentSummary, Path]:

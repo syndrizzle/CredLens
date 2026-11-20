@@ -173,6 +173,7 @@ documents = Table(
     Column("byte_size", Integer, nullable=False),
     Column("page_count", Integer),
     Column("extracted_char_count", Integer),
+    Column("extraction", JSONB),
     Column("status", String(20), nullable=False),
     Column("error_code", String(64)),
     Column("error_message", Text),

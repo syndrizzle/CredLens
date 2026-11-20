@@ -1,8 +1,8 @@
 # P3-02: digital-PDF candidate extraction plan
 
-Prepared: 2026-11-19. Planning task: P3-02-P1. Implementation: P3-02, pending.
+Prepared: 2026-11-19. Planning task: P3-02-P1. Implementation: P3-02, completed 2026-11-19.
 
-The user selected **fictional PDFs first**. This plan uses the existing [financial contract](FINANCIAL_CONTRACT.md) and `backend/tests/fixtures/aster_components.json`; it does not claim support for public financial statements. The planning task created no extraction code or corpus. P3-02-FX subsequently froze the [fictional fixture corpus](../backend/tests/fixtures/pdf_corpus/README.md) on 2026-11-19; extraction implementation remains pending.
+The user selected **fictional PDFs first**. This plan uses the existing [financial contract](FINANCIAL_CONTRACT.md) and `backend/tests/fixtures/aster_components.json`; it does not claim support for public financial statements. The planning task created no extraction code or corpus. P3-02-FX subsequently froze the [fictional fixture corpus](../backend/tests/fixtures/pdf_corpus/README.md) on 2026-11-19; P3-02 implemented bounded extraction (`app/pdf_extraction.py`, `app/pdf_worker.py`) and protected extraction snapshots (`documents.extraction`, migration `e519a47c8b14`, `app/documents.py`, `app/main.py`).
 
 ## Scope and flow
 
@@ -56,4 +56,15 @@ Affected files: `backend/app/pdf_worker.py`, `documents.py`, `schemas.py`, `mode
 - Security/persistence: anonymous, other-owner, wrong-business, and unknown IDs fail consistently for extraction reads/actions; legacy-ready documents remain usable; migration upgrade/downgrade and metadata check pass on a disposable branch; removal clears derived snapshots. Verify no financial revision or review-state changes.
 - Run relevant Pytest suites and `pip check`; record live skips honestly. Frontend lint/build are required if implementation touches frontend files. No application checks are claimed for this documentation-only plan.
 
-Fixture preparation is complete in P3-02-FX; no further product decision blocks extraction implementation. D-02 finance-reviewer validation remains open. Public statement selection/licensing and real-layout support remain later work; native Windows parser execution remains unverified from P3-01-F1.
+## Measured raw extraction results (`pdf-extraction-v1`, before manual correction)
+
+Exact-match scoring rule: a usable candidate (`normalized_inr is not None` and `issues == []`) counts as a true positive only when `(page_number, table_index, row_index, column_index, field, year_start, unit, multiplier, raw, amount, normalized_inr)` all match the frozen manifest annotation and `reviewed is False`.
+
+| Split / subset | PDFs / pages | Expected usable | Extracted usable | Exact matches | Omissions | Wrong matches | Raw precision | Raw recall | Unresolved flagged (`normalized_inr=None`) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Clean Aster reference (`aster-reference.pdf`, Layout A) | 1 / 3 | 24 | 24 | 24 | 0 | 0 | 24/24 (`100.00%`) | 24/24 (`100.00%`) | 0 |
+| Development corpus total (12 Layout A PDFs) | 12 / 18 | 97 | 97 | 97 | 0 | 0 | 97/97 (`100.00%`) | 97/97 (`100.00%`) | 51 / 51 expected (`1` blank `missing_value`, `1` dash `missing_value`, `3` `invalid_amount`, `6` `ambiguous_mapping`, `8` `missing_unit`, `8` `conflicting_unit`, `8` `missing_period`, `8` `conflicting_period`, `4` `duplicate_match`, `4` `conflicting_match`) |
+| Held-out fixture (`birch-held-out.pdf`, Birch Fabrication, Layout B, run once after freezing `pdf-extraction-v1`) | 1 / 3 | 20 | 20 | 20 | 0 | 0 | 20/20 (`100.00%`) | 20/20 (`100.00%`) | 0 (absent `interest_expense` and `current_maturities` remained absent and were not coerced to zero) |
+| Unsupported narrative/two-column layout fallback (synthetic check) | 1 / 1 | 0 | 0 | 0 | 0 | 0 | N/A (`0` emitted) | N/A (`0` expected) | 0 (`layout="unsupported"`, `supported_layout=False`, manual-entry guidance message) |
+
+These results measure synthetic digital-PDF fixture extraction before user correction and do not establish a real-world accuracy threshold on public financial statements. Because `birch-held-out.pdf` was evaluated once without rule adjustments, it remains a clean single-run evaluation for `pdf-extraction-v1`; any future rule tuning that uses Birch's output will require a new held-out fixture before the next unbiased evaluation. D-02 finance-reviewer validation remains open.

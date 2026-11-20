@@ -21,6 +21,8 @@ from app.document_ingress import DocumentUploadGuard
 from app.documents import (
     DocumentRejectError,
     delete_document,
+    extract_ready_document,
+    get_document_extraction,
     get_document_file,
     list_documents,
     retry_document_processing,
@@ -40,6 +42,7 @@ from app.schemas import (
     AnalysisRunResponse,
     BusinessSummary,
     CredentialsRequest,
+    DocumentExtractionResponse,
     DocumentSummary,
     SessionResponse,
     UpdateBusinessRequest,
@@ -277,6 +280,40 @@ def retry_business_document(business_id: UUID, document_id: UUID, request: Reque
         session = require_session(connection, request)
     with document_errors():
         return retry_document_processing(get_engine(), session.owner_id, business_id, document_id)
+
+
+@app.get(
+    "/api/businesses/{business_id}/documents/{document_id}/extraction",
+    response_model=DocumentExtractionResponse,
+)
+def read_business_document_extraction(
+    business_id: UUID, document_id: UUID, request: Request
+) -> DocumentExtractionResponse:
+    with db_transaction() as connection:
+        session = require_session(connection, request)
+        with document_errors():
+            return get_document_extraction(
+                connection, session.owner_id, business_id, document_id
+            )
+
+
+@app.post(
+    "/api/businesses/{business_id}/documents/{document_id}/extract",
+    response_model=DocumentExtractionResponse,
+)
+@app.post(
+    "/api/businesses/{business_id}/documents/{document_id}/extraction",
+    response_model=DocumentExtractionResponse,
+)
+def extract_ready_business_document(
+    business_id: UUID, document_id: UUID, request: Request
+) -> DocumentExtractionResponse:
+    with db_transaction() as connection:
+        session = require_session(connection, request)
+    with document_errors():
+        return extract_ready_document(
+            get_engine(), session.owner_id, business_id, document_id
+        )
 
 
 @app.get("/api/businesses/{business_id}/documents/{document_id}/file")
