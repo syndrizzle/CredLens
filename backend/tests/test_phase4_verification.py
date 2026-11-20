@@ -310,7 +310,7 @@ def test_phase4_24_question_coverage_and_refusal_benchmark(monkeypatch):
     def hallucinating_llm(_system: str, _user: str) -> tuple[str, str]:
         return ("qwen3:4b", "Revenue growth is 20.00% [F8] [F99] per note [D1] [D42].")
 
-    r_hal = answer_workspace_question(base_ctx, "What is revenue growth?", llm_caller=hallucinating_llm)
+    r_hal = answer_workspace_question(base_ctx, "What is revenue growth?", document_selected=True, llm_caller=hallucinating_llm)
     assert "[F99]" not in r_hal.answer and "[D42]" not in r_hal.answer
     assert "[F8]" in r_hal.answer and "[D1]" in r_hal.answer
 
@@ -511,17 +511,18 @@ def test_phase4_live_pgvector_isolation_and_qa(monkeypatch):
         ).json()["id"]
 
         # 1. Cross-business & cross-owner secret-phrase isolation in BOTH /retrieval and /qa
-        for secret_query, forbidden in (
-            ("What does ZIRC-99182 say?", "ZIRC-99182"),
-            ("What does OBSI-77412 say?", "OBSI-77412"),
+        for secret_query, forbidden_token, forbidden_payloads in (
+            ("What does ZIRC-99182 say?", "ZIRC-99182", ("Plant Two", "Zirconia")),
+            ("What does OBSI-77412 say?", "OBSI-77412", ("Owner B", "Obsidian")),
         ):
             r_qa = alice.post(f"/api/businesses/{biz_a1}/qa", json={"question": secret_query})
             assert r_qa.status_code == 200
             body = r_qa.json()
-            assert forbidden not in body["answer"]
+            for secret_word in forbidden_payloads:
+                assert secret_word.lower() not in body["answer"].lower()
             for doc_cit in body["document_citations"]:
                 assert doc_cit["document_id"] not in {doc_a2, doc_b1}
-                assert forbidden not in doc_cit["excerpt"]
+                assert forbidden_token not in doc_cit["excerpt"]
 
         # 2. Cross-owner / cross-business document_id uniform 404 on /qa
         assert bob.post(f"/api/businesses/{biz_a1}/qa", json={"question": "margin"}).status_code == 404
@@ -543,6 +544,19 @@ def test_phase4_live_pgvector_isolation_and_qa(monkeypatch):
         assert any(c["document_id"] == doc_a1 and c["page_number"] == 3 for c in m_body["document_citations"])
         if live_ollama:
             assert m_body["mode"] == "ollama"
+            aster_only = alice.post(
+                f"/api/businesses/{biz_a1}/qa",
+                json={"question": m_body["question"], "document_id": doc_a1},
+            )
+            assert aster_only.status_code == 200
+            answer = aster_only.json()
+            assert answer["mode"] == "ollama"
+            assert all(value in answer["answer"] for value in ("9.00%", "5.00%", "Borrowings exclude leases"))
+            assert "do not mention leases" not in answer["answer"].lower()
+            assert any(
+                c["cited"] and c["page_number"] == 3 and "Borrowings exclude leases" in c["excerpt"]
+                for c in answer["document_citations"]
+            )
 
         # 4. Prompt-injection + loan-approval refusal
         r_inj = alice.post(

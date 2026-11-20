@@ -22,7 +22,7 @@ This report records actual hardware, runtime, license, version, latency, memory,
 
 | Role | Model | Digest / Revision | License | Size / Dimensions | Context / Sequence Limit |
 | --- | --- | --- | --- | --- | --- |
-| Local instruction model (Ollama) | `qwen3:4b` (`Q4_K_M`, 4.02B params, GGUF) | `359d7dd4bcda` | Apache-2.0 | `2.5 GB` on disk (`3.2 GB` VRAM at `num_ctx=4096`) | Native `262,144`; configured **`num_ctx=4096`** (`100% GPU`) |
+| Local instruction model (Ollama) | `qwen3:4b-instruct` (`Q4_K_M`, 4.02B params, GGUF; refined from thinking-only `qwen3:4b` during live P4-04 verification) | `0edcdef34593` | Apache-2.0 | `2.5 GB` on disk (`3.2 GB` VRAM at `num_ctx=4096`) | Native `262,144`; configured **`num_ctx=4096`** (`100% GPU`) |
 | Local embedding model (Sentence Transformers, CPU) | `sentence-transformers/all-MiniLM-L6-v2` | `1110a243fdf4` | Apache-2.0 | `90.9 MB` safetensors, **`384`** dimensions | **`256`** WordPiece tokens max (`model.max_seq_length = 256`) |
 
 Why these models were chosen over alternatives checked online:

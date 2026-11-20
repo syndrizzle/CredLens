@@ -440,5 +440,8 @@ def ask_business_question(
         except LookupError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from None
     return answer_workspace_question(
-        context, payload.question, year_start=payload.year_start
+        context,
+        payload.question,
+        year_start=payload.year_start,
+        document_selected=payload.document_id is not None,
     )

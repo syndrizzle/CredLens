@@ -260,6 +260,7 @@ def test_fallback_handles_numerical_causal_missing_interest_and_document_questio
     assert "Not assessed" in r_interest.answer
     assert "interest expense" in r_interest.answer.lower()
     assert "5.00x" in r_interest.answer  # FY 2023-24 remains Supported
+    assert not r_interest.document_citations
     assert any(
         c.indicator == "interest_coverage" and c.year_start == 2024 and c.state == "Not assessed" and c.cited
         for c in r_interest.financial_citations
@@ -273,6 +274,7 @@ def test_fallback_handles_numerical_causal_missing_interest_and_document_questio
     r_doc = answer_workspace_question(ctx, "What do the borrowing notes say about leases?")
     assert "aster-reference.pdf, p. 3 (Note 4: Borrowings)" in r_doc.answer
     assert any(c.citation_id == "D1" and c.page_number == 3 and c.cited for c in r_doc.document_citations)
+    assert answer_workspace_question(ctx, "Are leases excluded?").document_citations[0].cited
 
     # 4. Absent year filter -> explicitly warns rather than misattributing.
     r_year = answer_workspace_question(ctx, "Summarize revenue growth", year_start=2019)
