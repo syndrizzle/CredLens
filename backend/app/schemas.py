@@ -551,3 +551,43 @@ class WorkspaceResponse(Model):
     latest_analysis: AnalysisResponse | None = None
     runs: list[AnalysisRunSummary] = Field(default_factory=list)
     documents: list[DocumentSummary] = Field(default_factory=list)
+
+
+class RetrievalRequest(Model):
+    query: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)
+    ]
+    top_k: int = Field(default=6, ge=1, le=6)
+    year_start: int | None = Field(default=None, ge=1, le=9998)
+    document_id: UUID | None = None
+
+    @field_validator("document_id", mode="before")
+    @classmethod
+    def parse_document_id(cls, value: object) -> UUID | None:
+        if value is None or isinstance(value, UUID):
+            return value
+        if isinstance(value, str):
+            try:
+                return UUID(value)
+            except ValueError:
+                pass
+        raise ValueError("Document ID must be a valid UUID or null")
+
+
+class RetrievedPassage(Model):
+    chunk_id: UUID
+    document_id: UUID
+    filename: str
+    chunk_index: int = Field(ge=0)
+    page_number: int = Field(ge=1, le=50)
+    section: str | None = None
+    period_years: list[int] = Field(default_factory=list)
+    content: str
+    token_count: int = Field(ge=1, le=256)
+    score: float
+
+
+class RetrievalResponse(Model):
+    embedding_model: str
+    max_tokens: int = Field(ge=1, le=256)
+    passages: list[RetrievedPassage] = Field(default_factory=list)

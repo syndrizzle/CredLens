@@ -112,6 +112,9 @@ Checked live PyPI release metadata on 2026-11-07 (and `tzdata` on 2026-11-12), t
 | Pytest | 9.2.0 | [PyPI](https://pypi.org/pypi/pytest/json) | >=3.10 |
 | HTTPX2 (TestClient) | 2.16.0 | [PyPI](https://pypi.org/pypi/httpx2/json) | >=3.11 |
 | tzdata | 2026.6 | [PyPI](https://pypi.org/pypi/tzdata/json) | >=2 |
+| pgvector (checked 2026-11-20) | 0.5.1 | [PyPI](https://pypi.org/pypi/pgvector/json) | >=3.10 |
+| sentence-transformers (checked 2026-11-20) | 6.3.0 | [PyPI](https://pypi.org/pypi/sentence-transformers/json) | >=3.10 |
+| torch CPU wheel (checked 2026-11-20) | 2.15.0+cpu | [PyTorch CPU index](https://download.pytorch.org/whl/cpu/torch/) | >=3.11 |
 
 The releases are not yanked and their runtime constraints admit the tested Python 3.14.8 and Python 3.12.2 environments. The installed Starlette TestClient explicitly prefers HTTPX2 and deprecates HTTPX; use HTTPX2 for these tests. Transitive versions are frozen in `requirements.txt`; `pip check` validates installed dependency constraints. Check release metadata again before future additions/upgrades and test the resolved set before changing pins.
 

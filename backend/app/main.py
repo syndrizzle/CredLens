@@ -37,6 +37,7 @@ from app.persistence import (
     save_business,
     update_business,
 )
+from app.retrieval import EmbeddingUnavailableError, retrieve_passages
 from app.schemas import (
     AnalysisRequest,
     AnalysisResponse,
@@ -45,6 +46,8 @@ from app.schemas import (
     CredentialsRequest,
     DocumentExtractionResponse,
     DocumentSummary,
+    RetrievalRequest,
+    RetrievalResponse,
     SessionResponse,
     UpdateBusinessRequest,
     WorkspaceResponse,
@@ -384,3 +387,28 @@ def remove_business_document(
     with document_errors():
         delete_document(get_engine(), session.owner_id, business_id, document_id)
     return {"status": "deleted"}
+
+
+@app.post(
+    "/api/businesses/{business_id}/retrieval",
+    response_model=RetrievalResponse,
+)
+def search_business_passages(
+    business_id: UUID, payload: RetrievalRequest, request: Request
+) -> RetrievalResponse:
+    with db_transaction() as connection:
+        session = require_session(connection, request)
+        try:
+            return retrieve_passages(
+                connection,
+                session.owner_id,
+                business_id,
+                payload.query,
+                top_k=payload.top_k,
+                year_start=payload.year_start,
+                document_id=payload.document_id,
+            )
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from None
+        except EmbeddingUnavailableError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from None

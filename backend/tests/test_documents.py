@@ -1054,3 +1054,304 @@ service.upload_and_process_document(get_engine(), UUID(sys.argv[1]), UUID(sys.ar
             ).status_code
             == 422
         )
+
+    def test_phase3_end_to_end_verification_and_file_access_matrix(self, env):
+        """P3-04 verification: full upload/review/analysis cases (separating raw extraction
+        errors & correction effort from final calculation accuracy), rejected-file cases,
+        interrupted-job recovery, and 28-case Phase 3 file/extraction negative access matrix
+        tracing FR01-06, FR10, NFR01-08."""
+        from app.auth import SESSION_COOKIE
+        from decimal import Decimal
+
+        engine = env[0]
+        corpus_dir = Path(__file__).resolve().parent / "fixtures" / "pdf_corpus"
+        aster_ref = (corpus_dir / "aster-reference.pdf").read_bytes()
+        aster_blank = (corpus_dir / "aster-blank-interest.pdf").read_bytes()
+        aster_invalid = (corpus_dir / "aster-invalid-amounts.pdf").read_bytes()
+
+        alice = TestClient(app)
+        bob = TestClient(app)
+        anon = TestClient(app)
+
+        reg_a = alice.post(
+            "/api/auth/register",
+            json={
+                "email": f"p304-a-{uuid4().hex[:8]}@example.com",
+                "password": "alice-password-123",
+            },
+        )
+        assert reg_a.status_code == 201
+        env[3].append(reg_a.json()["owner_id"])
+
+        reg_b = bob.post(
+            "/api/auth/register",
+            json={
+                "email": f"p304-b-{uuid4().hex[:8]}@example.com",
+                "password": "bob-password-12345",
+            },
+        )
+        assert reg_b.status_code == 201
+        env[3].append(reg_b.json()["owner_id"])
+
+        blank_ws = {
+            "business_name": "Aster Components (fictional)",
+            "currency": "INR",
+            "basis": "standalone",
+            "periods": [
+                {
+                    "year_start": 2024,
+                    "unit": "rupees",
+                    "comparable_to_prior": False,
+                    "values": {},
+                }
+            ],
+        }
+
+        def candidates_to_payload(doc_id: str, filename: str, cands: list[dict], reviewed: bool = True):
+            by_year: dict[int, dict] = {}
+            for cand in cands:
+                if cand["issues"] or cand["normalized_inr"] is None:
+                    continue
+                year = cand["year_start"]
+                by_year.setdefault(
+                    year,
+                    {
+                        "year_start": year,
+                        "unit": cand["unit"],
+                        "comparable_to_prior": year == 2024,
+                        "values": {},
+                    },
+                )
+                by_year[year]["values"][cand["field"]] = {
+                    "raw": cand["amount"],
+                    "reviewed": reviewed,
+                    "revision": 1,
+                    "origin": "document",
+                    "source": {
+                        "document_id": doc_id,
+                        "filename": filename,
+                        "page_number": cand["page_number"],
+                        "table_index": cand["table_index"],
+                        "row_index": cand["row_index"],
+                        "column_index": cand["column_index"],
+                        "label": cand["label"],
+                        "raw_token": cand["raw"],
+                    },
+                }
+            return {
+                "business_name": "Aster Components (fictional)",
+                "currency": "INR",
+                "basis": "standalone",
+                "periods": [by_year[y] for y in sorted(by_year)],
+            }
+
+        # --- Case 1: Clean Aster reference (24/24 usable, 0 manual figure corrections) ---
+        biz_ref = alice.post("/api/businesses", json=blank_ws).json()["business_id"]
+        biz_other = alice.post(
+            "/api/businesses", json={**blank_ws, "business_name": "Other Owned Business"}
+        ).json()["business_id"]
+
+        up_ref = alice.post(
+            f"/api/businesses/{biz_ref}/documents",
+            files={"file": ("aster-reference.pdf", aster_ref, "application/pdf")},
+        )
+        assert up_ref.status_code == 201 and up_ref.json()["status"] == "ready"
+        doc_ref = up_ref.json()["id"]
+        ext_ref = alice.get(f"/api/businesses/{biz_ref}/documents/{doc_ref}/extraction").json()
+        assert ext_ref["extraction_status"] == "ready"
+        usable_ref = [c for c in ext_ref["extraction"]["candidates"] if not c["issues"]]
+        assert len(usable_ref) == 24 and len(ext_ref["extraction"]["candidates"]) == 24
+
+        ref_payload = candidates_to_payload(doc_ref, "aster-reference.pdf", usable_ref, reviewed=True)
+        assert (
+            alice.put(f"/api/businesses/{biz_ref}", json={**ref_payload, "expected_revision": 1}).status_code
+            == 200
+        )
+        ref_run = alice.post(f"/api/businesses/{biz_ref}/analysis")
+        assert ref_run.status_code == 201
+        ref_periods = {p["year_start"]: p for p in ref_run.json()["latest_analysis"]["periods"]}
+        expected_2023 = {
+            "revenue_growth": ("Not assessed", None),
+            "net_profit_margin": ("Supported", Decimal("9")),
+            "working_capital": ("Supported", Decimal("2000000")),
+            "current_ratio": ("Supported", Decimal("2")),
+            "debt_to_equity": ("Supported", Decimal("0.3")),
+            "interest_coverage": ("Supported", Decimal("5")),
+        }
+        expected_2024 = {
+            "revenue_growth": ("Supported", Decimal("20")),
+            "net_profit_margin": ("Supported", Decimal("5")),
+            "working_capital": ("Supported", Decimal("2500000")),
+            "current_ratio": ("Supported", Decimal("2")),
+            "debt_to_equity": ("Supported", Decimal("0.3")),
+            "interest_coverage": ("Supported", Decimal("3")),
+        }
+        for year, expected_map in ((2023, expected_2023), (2024, expected_2024)):
+            assert ref_periods[year]["balance_check"]["state"] == "Supported"
+            assert Decimal(ref_periods[year]["balance_check"]["difference_inr"]) == 0
+            for ind in ref_periods[year]["indicators"]:
+                exp_state, exp_val = expected_map[ind["indicator"]]
+                assert ind["state"] == exp_state
+                if exp_val is not None:
+                    assert Decimal(ind["value"]) == exp_val
+                    assert all(inp["figure"]["origin"] == "document" for inp in ind["inputs"])
+
+        # --- Case 2: Missing-interest PDF (7/8 usable, 1 missing_value -> 1 manual entry unlocks coverage) ---
+        biz_blank = alice.post("/api/businesses", json=blank_ws).json()["business_id"]
+        up_blank = alice.post(
+            f"/api/businesses/{biz_blank}/documents",
+            files={"file": ("aster-blank-interest.pdf", aster_blank, "application/pdf")},
+        )
+        assert up_blank.status_code == 201 and up_blank.json()["status"] == "ready"
+        doc_blank = up_blank.json()["id"]
+        ext_blank = alice.get(f"/api/businesses/{biz_blank}/documents/{doc_blank}/extraction").json()
+        cands_blank = ext_blank["extraction"]["candidates"]
+        usable_blank = [c for c in cands_blank if not c["issues"]]
+        unres_blank = [c for c in cands_blank if c["issues"]]
+        assert len(usable_blank) == 7 and len(unres_blank) == 1
+        assert unres_blank[0]["field"] == "interest_expense" and unres_blank[0]["issues"] == ["missing_value"]
+
+        blank_payload = candidates_to_payload(doc_blank, "aster-blank-interest.pdf", usable_blank, reviewed=True)
+        assert alice.put(f"/api/businesses/{biz_blank}", json={**blank_payload, "expected_revision": 1}).status_code == 200
+        run_blank1 = alice.post(f"/api/businesses/{biz_blank}/analysis").json()
+        ind24_b1 = {i["indicator"]: i for i in run_blank1["latest_analysis"]["periods"][1]["indicators"]}
+        assert ind24_b1["interest_coverage"]["state"] == "Not assessed"
+        assert ind24_b1["revenue_growth"]["state"] == "Supported" and Decimal(ind24_b1["revenue_growth"]["value"]) == 20
+        assert ind24_b1["net_profit_margin"]["state"] == "Supported" and Decimal(ind24_b1["net_profit_margin"]["value"]) == 5
+
+        blank_payload["periods"][1]["values"]["interest_expense"] = {
+            "raw": "400000.00", "reviewed": True, "revision": 1, "origin": "manual",
+        }
+        assert alice.put(f"/api/businesses/{biz_blank}", json={**blank_payload, "expected_revision": 2}).status_code == 200
+        run_blank2 = alice.post(f"/api/businesses/{biz_blank}/analysis").json()
+        ind24_b2 = {i["indicator"]: i for i in run_blank2["latest_analysis"]["periods"][1]["indicators"]}
+        assert ind24_b2["interest_coverage"]["state"] == "Supported" and Decimal(ind24_b2["interest_coverage"]["value"]) == 3
+        assert run_blank2["runs"][1]["superseded"] is True
+
+        # --- Case 3: Invalid-amount PDF (5/8 usable, 3 invalid_amount flagged -> 3 manual corrections restore 100% accuracy) ---
+        biz_inv = alice.post("/api/businesses", json=blank_ws).json()["business_id"]
+        up_inv = alice.post(
+            f"/api/businesses/{biz_inv}/documents",
+            files={"file": ("aster-invalid-amounts.pdf", aster_invalid, "application/pdf")},
+        )
+        assert up_inv.status_code == 201 and up_inv.json()["status"] == "ready"
+        doc_inv = up_inv.json()["id"]
+        ext_inv = alice.get(f"/api/businesses/{biz_inv}/documents/{doc_inv}/extraction").json()
+        cands_inv = ext_inv["extraction"]["candidates"]
+        usable_inv = [c for c in cands_inv if not c["issues"]]
+        unres_inv = [c for c in cands_inv if c["issues"]]
+        assert len(usable_inv) == 5 and len(unres_inv) == 3
+        assert {c["field"] for c in unres_inv} == {"revenue", "profit_after_tax", "ebit"}
+        assert all(c["issues"] == ["invalid_amount"] and c["normalized_inr"] is None for c in unres_inv)
+
+        inv_payload = candidates_to_payload(doc_inv, "aster-invalid-amounts.pdf", usable_inv, reviewed=True)
+        for field_key, corrected_raw in (
+            ("revenue", "12000000.00"),
+            ("profit_after_tax", "600000.00"),
+            ("ebit", "1200000.00"),
+        ):
+            inv_payload["periods"][1]["values"][field_key] = {
+                "raw": corrected_raw, "reviewed": True, "revision": 1, "origin": "manual",
+            }
+        assert alice.put(f"/api/businesses/{biz_inv}", json={**inv_payload, "expected_revision": 1}).status_code == 200
+        run_inv = alice.post(f"/api/businesses/{biz_inv}/analysis").json()
+        ind24_inv = {i["indicator"]: i for i in run_inv["latest_analysis"]["periods"][1]["indicators"]}
+        assert Decimal(ind24_inv["revenue_growth"]["value"]) == 20
+        assert Decimal(ind24_inv["net_profit_margin"]["value"]) == 5
+        assert Decimal(ind24_inv["interest_coverage"]["value"]) == 3
+        cov_origins = {inp["field"]: inp["figure"]["origin"] for inp in ind24_inv["interest_coverage"]["inputs"]}
+        assert cov_origins == {"ebit": "manual", "interest_expense": "document"}
+
+        # --- Rejected-file cases (FR02-03, NFR06-08) ---
+        assert alice.post(
+            f"/api/businesses/{biz_ref}/documents",
+            files={"file": ("notes.txt", b"%PDF-1.4 text", "text/plain")},
+        ).status_code == 415
+        assert alice.post(
+            f"/api/businesses/{biz_ref}/documents",
+            files={"file": ("empty.pdf", b"", "application/pdf")},
+        ).status_code == 400
+        assert alice.post(
+            f"/api/businesses/{biz_ref}/documents",
+            files={"file": ("fake.pdf", b"not a pdf header", "application/pdf")},
+        ).status_code == 415
+        assert alice.post(
+            f"/api/businesses/{biz_ref}/documents",
+            files={"file": ("huge.pdf", b"%PDF-1.4\n" + b"0" * MAX_PDF_BYTES, "application/pdf")},
+        ).status_code == 413
+
+        for name, raw_bytes, expected_code in (
+            ("scanned.pdf", build_minimal_pdf([""]), "scanned_only_pdf"),
+            ("locked.pdf", build_minimal_pdf(["Locked"], encrypt=True), "encrypted_pdf"),
+            ("long.pdf", build_minimal_pdf(["Page"] * 51), "too_many_pages"),
+            ("broken.pdf", b"%PDF-1.4\ncorrupted-body", "corrupted_pdf"),
+        ):
+            rej = alice.post(
+                f"/api/businesses/{biz_ref}/documents",
+                files={"file": (name, raw_bytes, "application/pdf")},
+            )
+            assert rej.status_code == 201
+            rej_doc = rej.json()
+            assert rej_doc["status"] == "failed" and rej_doc["error_code"] == expected_code
+            assert alice.get(f"/api/businesses/{biz_ref}/documents/{rej_doc['id']}/file").status_code == 404
+            rej_ext = alice.get(f"/api/businesses/{biz_ref}/documents/{rej_doc['id']}/extraction").json()
+            assert rej_ext["extraction_status"] == "failed" and rej_ext["extraction"] is None
+
+        # --- Interrupted-job reconciliation & retry recovery (NFR07-08) ---
+        with engine.begin() as conn:
+            conn.execute(
+                documents.update()
+                .where(documents.c.id == doc_ref)
+                .values(status="processing", page_count=None, extracted_char_count=None, error_code=None, error_message=None)
+            )
+        reconciled = [d for d in alice.get(f"/api/businesses/{biz_ref}/documents").json() if d["id"] == doc_ref][0]
+        assert reconciled["status"] == "failed" and reconciled["error_code"] == "interrupted_job"
+        assert alice.get(f"/api/businesses/{biz_ref}/documents/{doc_ref}/file").status_code == 404
+        assert alice.get(f"/api/businesses/{biz_ref}/documents/{doc_ref}/extraction").json()["extraction"] is None
+        retried = alice.post(f"/api/businesses/{biz_ref}/documents/{doc_ref}/retry")
+        assert retried.status_code == 200 and retried.json()["status"] == "ready"
+        assert len(alice.get(f"/api/businesses/{biz_ref}/documents/{doc_ref}/extraction").json()["extraction"]["candidates"]) == 24
+
+        # --- Extended Phase 3 Negative Access Matrix (28 distinct cases: FR01, NFR02-03) ---
+        doc_routes = [
+            ("GET", f"/api/businesses/{biz_ref}/documents", None),
+            ("POST", f"/api/businesses/{biz_ref}/documents", {"file": ("a.pdf", aster_ref, "application/pdf")}),
+            ("POST", f"/api/businesses/{biz_ref}/documents/{doc_ref}/retry", None),
+            ("GET", f"/api/businesses/{biz_ref}/documents/{doc_ref}/extraction", None),
+            ("POST", f"/api/businesses/{biz_ref}/documents/{doc_ref}/extract", None),
+            ("POST", f"/api/businesses/{biz_ref}/documents/{doc_ref}/extraction", None),
+            ("GET", f"/api/businesses/{biz_ref}/documents/{doc_ref}/file", None),
+            ("DELETE", f"/api/businesses/{biz_ref}/documents/{doc_ref}", None),
+        ]
+        # Cases 1-8: Unauthenticated (401).
+        for method, path, files in doc_routes:
+            resp = anon.request(method, path, files=files) if files else anon.request(method, path)
+            assert resp.status_code == 401
+
+        # Cases 9-16: Forged session cookie (401).
+        forged = TestClient(app)
+        forged.cookies.set(SESSION_COOKIE, "forged-phase3-session-token-1234567890")
+        for method, path, files in doc_routes:
+            resp = forged.request(method, path, files=files) if files else forged.request(method, path)
+            assert resp.status_code == 401
+
+        # Cases 17-23: Cross-owner (Bob targeting Alice's business/doc -> uniform 404).
+        for method, path, files in doc_routes[:5] + doc_routes[6:]:
+            resp = bob.request(method, path, files=files) if files else bob.request(method, path)
+            assert resp.status_code == 404
+
+        # Cases 24-28: Same-owner cross-business (Alice's biz_other targeting biz_ref's doc_ref -> uniform 404 identical to unknown doc).
+        unknown_doc = str(uuid4())
+        for method, suffix in (
+            ("POST", "retry"),
+            ("GET", "extraction"),
+            ("POST", "extract"),
+            ("GET", "file"),
+            ("DELETE", ""),
+        ):
+            cross_path = f"/api/businesses/{biz_other}/documents/{doc_ref}" + (f"/{suffix}" if suffix else "")
+            unknown_path = f"/api/businesses/{biz_ref}/documents/{unknown_doc}" + (f"/{suffix}" if suffix else "")
+            r_cross = alice.request(method, cross_path)
+            r_unknown = alice.request(method, unknown_path)
+            assert r_cross.status_code == 404 and r_unknown.status_code == 404
+            assert r_cross.json() == r_unknown.json()

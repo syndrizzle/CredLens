@@ -23,6 +23,11 @@ from app.pdf_limits import (
     WALL_SECONDS,
 )
 from app.pdf_worker import PdfInspectionResult
+from app.retrieval import (
+    EmbeddingUnavailableError,
+    prepare_embedded_chunks,
+    replace_document_chunks,
+)
 from app.schemas import (
     DocumentExtractionResponse,
     DocumentExtractionSnapshot,
@@ -409,6 +414,7 @@ def _remove_file_and_empty_dirs(target: Path) -> None:
 def _finish_processing(
     engine: Engine, document_id: UUID, path: Path
 ) -> DocumentSummary:
+    snapshot: DocumentExtractionSnapshot | None = None
     try:
         if not path.is_file():
             raise DocumentRejectError(
@@ -449,28 +455,50 @@ def _finish_processing(
             error_code=exc.code,
             error_message=exc.message,
         )
-    with engine.begin() as connection:
-        if values["status"] == "ready":
-            stored_sha = connection.execute(
-                select(documents.c.sha256).where(documents.c.id == document_id)
-            ).scalar_one()
-            if values["extraction"]["document_sha256"] != stored_sha:
-                values = dict(
-                    status="failed",
-                    page_count=None,
-                    extracted_char_count=None,
-                    error_code="corrupted_pdf",
-                    error_message=PDF_ERRORS["corrupted_pdf"],
+    embedded_chunks = None
+    if values["status"] == "ready" and snapshot is not None:
+        with engine.connect() as connection:
+            meta = (
+                connection.execute(
+                    select(
+                        documents.c.sha256,
+                        documents.c.filename,
+                    ).where(documents.c.id == document_id)
                 )
+                .mappings()
+                .one()
+            )
+        if values["extraction"]["document_sha256"] != meta["sha256"]:
+            values = dict(
+                status="failed",
+                page_count=None,
+                extracted_char_count=None,
+                error_code="corrupted_pdf",
+                error_message=PDF_ERRORS["corrupted_pdf"],
+            )
+        else:
+            try:
+                embedded_chunks = prepare_embedded_chunks(snapshot, meta["filename"])
+            except EmbeddingUnavailableError:
+                # Keep deterministic PDF upload/extraction usable if local embedding cache is absent.
+                embedded_chunks = []
+    with engine.begin() as connection:
         row = (
             connection.execute(
                 documents.update()
                 .where(documents.c.id == document_id)
                 .values(**values, updated_at=func.now())
-                .returning(*SUMMARY_COLUMNS)
+                .returning(*SUMMARY_COLUMNS, documents.c.owner_id)
             )
             .mappings()
             .one()
+        )
+        replace_document_chunks(
+            connection,
+            row["owner_id"],
+            row["business_id"],
+            document_id,
+            embedded_chunks if values["status"] == "ready" and embedded_chunks else [],
         )
         summary = _row_to_summary(row)
     return summary

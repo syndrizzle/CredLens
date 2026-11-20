@@ -1,3 +1,4 @@
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
@@ -233,4 +234,49 @@ Index(
     documents.c.owner_id,
     unique=True,
     postgresql_where=text("status = 'processing'"),
+)
+document_chunks = Table(
+    "document_chunks",
+    metadata,
+    Column("id", Uuid, primary_key=True),
+    Column(
+        "document_id",
+        Uuid,
+        ForeignKey("documents.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    ),
+    Column(
+        "business_id",
+        Uuid,
+        ForeignKey("businesses.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    ),
+    Column(
+        "owner_id",
+        Uuid,
+        ForeignKey("owners.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    ),
+    Column("chunk_index", Integer, nullable=False),
+    Column("page_number", Integer, nullable=False),
+    Column("section", String(255), nullable=True),
+    Column("period_years", JSONB, nullable=False),
+    Column("content", Text, nullable=False),
+    Column("token_count", Integer, nullable=False),
+    Column("embedding_model", String(120), nullable=False),
+    Column("embedding", Vector(384), nullable=False),
+    created_at(),
+    UniqueConstraint("document_id", "chunk_index", name="chunk_document_index"),
+    CheckConstraint("chunk_index >= 0", name="chunk_index_non_negative"),
+    CheckConstraint("page_number BETWEEN 1 AND 50", name="chunk_page_number"),
+    CheckConstraint("length(btrim(content)) > 0", name="chunk_content_non_empty"),
+    CheckConstraint("token_count BETWEEN 1 AND 256", name="chunk_token_count"),
+)
+Index(
+    "ix_document_chunks_owner_business",
+    document_chunks.c.owner_id,
+    document_chunks.c.business_id,
 )
