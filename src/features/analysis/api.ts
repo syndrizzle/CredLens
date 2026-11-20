@@ -1,6 +1,9 @@
 import {
   FINANCIAL_FIELDS,
   formFromRequest,
+  isDocumentFigure,
+  type FigureOrigin,
+  type FigureSource,
   type FormDraft,
   type FinancialFieldKey,
   type RequestPayload,
@@ -20,7 +23,7 @@ export type EvidenceState = "Supported" | "Needs review" | "Not assessed" | "Not
 export type Reason = { code: string; message: string; fields: FinancialFieldKey[] };
 export type InputEvidence = {
   year_start: number; field: FinancialFieldKey; unit: Unit;
-  figure: { raw: string | null; reviewed: boolean; revision: number; origin: "manual" };
+  figure: { raw: string | null; reviewed: boolean; revision: number; origin: FigureOrigin; source?: FigureSource | null };
   normalized_inr: string | null;
 };
 export type Finding = {
@@ -59,6 +62,86 @@ export type DocumentSummary = {
   error_code: string | null; error_message: string | null;
   created_at: string; updated_at: string;
 };
+export type CandidateIssueCode =
+  | "missing_value"
+  | "invalid_amount"
+  | "ambiguous_mapping"
+  | "missing_unit"
+  | "conflicting_unit"
+  | "missing_period"
+  | "conflicting_period"
+  | "missing_basis"
+  | "conflicting_basis"
+  | "duplicate_match"
+  | "conflicting_match";
+
+export type ExtractedTable = {
+  table_index: number;
+  rows: string[][];
+};
+
+export type ExtractedPage = {
+  page_number: number;
+  text: string;
+  tables: ExtractedTable[];
+  statement_title: string | null;
+  basis: "standalone" | null;
+  basis_context: string | null;
+  period_context: string | null;
+  unit: Unit | null;
+  multiplier: number | null;
+  unit_header: string | null;
+  issues: string[];
+};
+
+export type ExtractedCandidate = {
+  page_number: number;
+  table_index: number;
+  row_index: number;
+  column_index: number;
+  field: FinancialFieldKey | null;
+  label: string;
+  note: string | null;
+  raw: string;
+  source_row: string[];
+  source_context: string[];
+  period_header: string;
+  period_context: string | null;
+  year_start: number | null;
+  unit_header: string | null;
+  unit: Unit | null;
+  multiplier: number | null;
+  basis: "standalone" | null;
+  basis_context: string | null;
+  amount: string | null;
+  normalized_inr: string | null;
+  reviewed: false;
+  issues: CandidateIssueCode[];
+};
+
+export type DocumentExtractionSnapshot = {
+  schema_version: "document-extraction-v2";
+  document_sha256: string;
+  layout: "layout_a" | "unsupported";
+  page_count: number;
+  extracted_char_count: number;
+  pages: ExtractedPage[];
+  candidates: ExtractedCandidate[];
+  issues: string[];
+};
+
+export type DocumentExtractionResponse = DocumentSummary & {
+  extraction_status:
+    | "ready"
+    | "not_extracted"
+    | "refresh_required"
+    | "processing"
+    | "failed"
+    | "deletion_pending";
+  extraction_message: string | null;
+  extraction: DocumentExtractionSnapshot | null;
+};
+
 export type WorkspaceResponse = {
   business_id: string; input_revision: number;
   request: RequestPayload;
@@ -67,6 +150,11 @@ export type WorkspaceResponse = {
   documents?: DocumentSummary[];
 };
 
+export function documentFileUrl(businessId: string, documentId: string, pageNumber?: number): string {
+  const base = `/api/businesses/${encodeURIComponent(businessId)}/documents/${encodeURIComponent(documentId)}/file`;
+  return pageNumber !== undefined ? `${base}#page=${pageNumber}` : base;
+}
+
 export function analysisRequest(form: FormDraft): RequestPayload {
   return {
     business_name: form.businessName.trim(), currency: "INR", basis: "standalone",
@@ -74,7 +162,16 @@ export function analysisRequest(form: FormDraft): RequestPayload {
       year_start: period.yearStart, unit: period.unit, comparable_to_prior: period.comparableToPrior,
       values: Object.fromEntries(FINANCIAL_FIELDS.map(({ key }) => {
         const figure = period.figures[key];
-        return [key, { raw: figure.raw, reviewed: Boolean(figure.raw.trim()) && figure.reviewed, origin: "manual", revision: figure.revision ?? 1 }];
+        if (isDocumentFigure(figure)) {
+          return [key, {
+            raw: figure.raw,
+            reviewed: figure.reviewed,
+            origin: "document" as const,
+            source: figure.source!,
+            revision: figure.revision ?? 1,
+          }];
+        }
+        return [key, { raw: figure.raw, reviewed: Boolean(figure.raw.trim()) && figure.reviewed, origin: "manual" as const, revision: figure.revision ?? 1 }];
       })),
     })),
   };
@@ -193,6 +290,20 @@ export async function retryDocument(businessId: string, documentId: string): Pro
   return parseDocumentResponse(response);
 }
 
+export async function fetchDocumentExtraction(businessId: string, documentId: string): Promise<DocumentExtractionResponse> {
+  const response = await fetch(`/api/businesses/${encodeURIComponent(businessId)}/documents/${encodeURIComponent(documentId)}/extraction`, {
+    credentials: "same-origin", signal: AbortSignal.timeout(30000),
+  });
+  return parseExtractionResponse(response);
+}
+
+export async function runDocumentExtraction(businessId: string, documentId: string): Promise<DocumentExtractionResponse> {
+  const response = await fetch(`/api/businesses/${encodeURIComponent(businessId)}/documents/${encodeURIComponent(documentId)}/extract`, {
+    method: "POST", credentials: "same-origin", signal: AbortSignal.timeout(30000),
+  });
+  return parseExtractionResponse(response);
+}
+
 export async function deleteDocument(businessId: string, documentId: string): Promise<void> {
   const response = await fetch(`/api/businesses/${encodeURIComponent(businessId)}/documents/${encodeURIComponent(documentId)}`, {
     method: "DELETE", credentials: "same-origin", signal: AbortSignal.timeout(30000),
@@ -236,11 +347,28 @@ async function parseDocumentResponse(response: Response): Promise<DocumentSummar
   return body;
 }
 
+async function parseExtractionResponse(response: Response): Promise<DocumentExtractionResponse> {
+  if (response.status === 401) throw new Error("Your session expired. Sign in again.");
+  if (response.status === 404) throw new Error("Workspace or document not found.");
+  if (!response.ok) {
+    const msg = await extractDocumentError(response);
+    if (msg) throw new Error(msg);
+    if (response.status === 409) throw new Error("Another PDF processing job is already active; wait for it to finish.");
+    throw new Error("Could not load PDF extraction details.");
+  }
+  const body: unknown = await response.json();
+  if (!validExtractionResponse(body)) throw new Error("The server returned an invalid extraction payload.");
+  return body;
+}
+
 async function parseWorkspace(response: Response): Promise<WorkspaceResponse> {
   if (response.status === 401) throw new Error("Your session expired. Sign in again.");
   if (response.status === 404) throw new Error("Workspace not found.");
   if (response.status === 409) throw new Error("Workspace has been updated in another session; reload before saving.");
-  if (response.status === 422) throw new Error("The server rejected these entries. Check the business, completed years, and amount format.");
+  if (response.status === 422) {
+    const msg = await extractDocumentError(response);
+    throw new Error(msg ?? "The server rejected these entries. Check the business, completed years, and amount format.");
+  }
   if (!response.ok) throw new Error("Workspace service is unavailable. Check that the local backend and database are running.");
   const body: unknown = await response.json();
   if (!validWorkspace(body)) throw new Error("The server returned an invalid workspace payload.");
@@ -251,14 +379,32 @@ const decimal = (value: unknown): value is string => typeof value === "string" &
 const record = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 const state = (value: unknown) => ["Supported", "Needs review", "Not assessed", "Not meaningful"].includes(value as string);
 const field = (value: unknown) => FINANCIAL_FIELDS.some(item => item.key === value);
+function validFigureSource(value: unknown): value is FigureSource {
+  return record(value) &&
+    (value.document_id === null || (typeof value.document_id === "string" && value.document_id.length > 0)) &&
+    typeof value.filename === "string" && value.filename.length > 0 &&
+    Number.isInteger(value.page_number) && Number(value.page_number) >= 1 && Number(value.page_number) <= 50 &&
+    Number.isInteger(value.table_index) && Number(value.table_index) >= 1 && Number(value.table_index) <= 10 &&
+    Number.isInteger(value.row_index) && Number(value.row_index) >= 2 && Number(value.row_index) <= 250 &&
+    Number.isInteger(value.column_index) && Number(value.column_index) >= 2 && Number(value.column_index) <= 16 &&
+    typeof value.label === "string" && value.label.length > 0 &&
+    typeof value.raw_token === "string" && value.raw_token.length > 0;
+}
+function validFigureValue(value: unknown): boolean {
+  if (!record(value)) return false;
+  if (!(value.raw === null || typeof value.raw === "string")) return false;
+  if (typeof value.reviewed !== "boolean") return false;
+  if (!Number.isInteger(value.revision) || Number(value.revision) <= 0) return false;
+  if (value.origin === "manual") return value.source === undefined || value.source === null;
+  if (value.origin === "document") return validFigureSource(value.source);
+  return false;
+}
 function reasons(value: unknown): boolean {
   return Array.isArray(value) && value.every(item => record(item) && typeof item.code === "string" && typeof item.message === "string" && Array.isArray(item.fields) && item.fields.every(field));
 }
 function inputs(value: unknown): boolean {
   return Array.isArray(value) && value.every(item => record(item) && Number.isInteger(item.year_start) && field(item.field) &&
-    ["rupees", "thousands", "lakhs", "crores"].includes(item.unit as string) && record(item.figure) &&
-    (item.figure.raw === null || typeof item.figure.raw === "string") && typeof item.figure.reviewed === "boolean" &&
-    Number.isInteger(item.figure.revision) && Number(item.figure.revision) > 0 && item.figure.origin === "manual" &&
+    ["rupees", "thousands", "lakhs", "crores"].includes(item.unit as string) && validFigureValue(item.figure) &&
     (item.normalized_inr === null || decimal(item.normalized_inr)));
 }
 function validRequest(value: unknown): value is RequestPayload {
@@ -267,7 +413,8 @@ function validRequest(value: unknown): value is RequestPayload {
     value.periods.length >= 1 && value.periods.length <= 3 &&
     value.periods.every(period => record(period) && Number.isInteger(period.year_start) &&
       ["rupees", "thousands", "lakhs", "crores"].includes(period.unit as string) &&
-      typeof period.comparable_to_prior === "boolean" && record(period.values));
+      typeof period.comparable_to_prior === "boolean" && record(period.values) &&
+      Object.entries(period.values).every(([key, fig]) => field(key) && validFigureValue(fig)));
 }
 function validRuns(value: unknown): boolean {
   return value === undefined || (Array.isArray(value) && value.every(run => record(run) &&
@@ -292,6 +439,38 @@ function validDocument(value: unknown): value is DocumentSummary {
 }
 function validDocuments(value: unknown): boolean {
   return value === undefined || (Array.isArray(value) && value.every(validDocument));
+}
+function validExtractionSnapshot(value: unknown): value is DocumentExtractionSnapshot {
+  if (!record(value) || value.schema_version !== "document-extraction-v2" ||
+      typeof value.document_sha256 !== "string" || value.document_sha256.length !== 64 ||
+      !["layout_a", "unsupported"].includes(value.layout as string) ||
+      !Number.isInteger(value.page_count) || Number(value.page_count) < 1 || Number(value.page_count) > 50 ||
+      !Number.isInteger(value.extracted_char_count) || Number(value.extracted_char_count) < 1 ||
+      !Array.isArray(value.pages) || value.pages.length !== value.page_count ||
+      !Array.isArray(value.candidates) || !Array.isArray(value.issues)) return false;
+  const pagesOk = value.pages.every(page => record(page) &&
+    Number.isInteger(page.page_number) && Number(page.page_number) >= 1 &&
+    typeof page.text === "string" && Array.isArray(page.tables) &&
+    page.tables.every(table => record(table) && Number.isInteger(table.table_index) &&
+      Array.isArray(table.rows) && table.rows.every(row => Array.isArray(row) && row.every(cell => typeof cell === "string"))));
+  const candidatesOk = value.candidates.every(candidate => record(candidate) &&
+    Number.isInteger(candidate.page_number) && Number.isInteger(candidate.table_index) &&
+    Number.isInteger(candidate.row_index) && Number.isInteger(candidate.column_index) &&
+    (candidate.field === null || field(candidate.field)) &&
+    typeof candidate.label === "string" && typeof candidate.raw === "string" &&
+    Array.isArray(candidate.source_row) && Array.isArray(candidate.issues) &&
+    candidate.reviewed === false &&
+    (candidate.amount === null || decimal(candidate.amount)) &&
+    (candidate.normalized_inr === null || decimal(candidate.normalized_inr)));
+  return pagesOk && candidatesOk;
+}
+function validExtractionResponse(value: unknown): value is DocumentExtractionResponse {
+  if (!validDocument(value)) return false;
+  const raw = value as Record<string, unknown>;
+  if (!["ready", "not_extracted", "refresh_required", "processing", "failed", "deletion_pending"].includes(raw.extraction_status as string)) return false;
+  if (!(raw.extraction_message === null || typeof raw.extraction_message === "string")) return false;
+  if (raw.extraction_status === "ready") return validExtractionSnapshot(raw.extraction);
+  return raw.extraction === null;
 }
 function validWorkspace(value: unknown): value is WorkspaceResponse {
   if (!record(value) || typeof value.business_id !== "string" || !Number.isInteger(value.input_revision) || !validRequest(value.request) || !validRuns(value.runs) || !validDocuments(value.documents)) return false;

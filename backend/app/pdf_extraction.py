@@ -1,7 +1,8 @@
 """Bounded Layout A candidate extraction for digital financial statement PDFs."""
+
+import re
 from datetime import date, datetime
 from decimal import Decimal
-import re
 from zoneinfo import ZoneInfo
 
 from app.pdf_limits import (
@@ -16,6 +17,7 @@ from app.pdf_limits import (
     MAX_TOTAL_TEXT_LENGTH,
 )
 from app.schemas import (
+    NOTE_HEADERS,
     UNIT_MULTIPLIERS,
     CandidateIssueCode,
     DocumentExtractionSnapshot,
@@ -31,8 +33,14 @@ class ExtractionLimitExceeded(Exception):
     pass
 
 
-LABEL_HEADERS = {"particulars", "line item", "line items", "item", "items", "description"}
-NOTE_HEADERS = {"note", "notes", "note no", "note no.", "note ref", "note reference", "schedule"}
+LABEL_HEADERS = {
+    "particulars",
+    "line item",
+    "line items",
+    "item",
+    "items",
+    "description",
+}
 
 FIELD_LABELS: dict[str, FinancialField] = {
     "revenue from operations": "revenue",
@@ -90,7 +98,9 @@ UNIT_PATTERNS: tuple[tuple[re.Pattern[str], Unit], ...] = (
     (re.compile(r"\blakhs?\b", re.I), "lakhs"),
     (re.compile(r"\bcrores?\b", re.I), "crores"),
 )
-UNSUPPORTED_UNIT_RE = re.compile(r"\b(?:millions?|billions?|usd|eur|gbp|jpy)\b|[$€£¥]", re.I)
+UNSUPPORTED_UNIT_RE = re.compile(
+    r"\b(?:millions?|billions?|usd|eur|gbp|jpy)\b|[$€£¥]", re.I
+)
 
 NON_MARCH_DATE_RE = re.compile(
     r"\b\d{1,2}\s+(?:Jan|January|Feb|February|Apr|April|May|Jun|June|Jul|July|Aug|August|Sep|Sept|September|Oct|October|Nov|November|Dec|December)\s+\d{4}\b"
@@ -173,7 +183,11 @@ def _parse_fiscal_years(text: str, today: date) -> tuple[list[int], bool]:
     for match in FY_SPAN_RE.finditer(text):
         start_year = int(match.group(1))
         end_token = match.group(2)
-        end_year = (start_year // 100) * 100 + int(end_token) if len(end_token) == 2 else int(end_token)
+        end_year = (
+            (start_year // 100) * 100 + int(end_token)
+            if len(end_token) == 2
+            else int(end_token)
+        )
         if end_year != start_year + 1:
             invalid = True
             continue
@@ -184,23 +198,53 @@ def _parse_fiscal_years(text: str, today: date) -> tuple[list[int], bool]:
     return years, invalid
 
 
-def _extract_pre_table_lines(page_text: str, header_row: list[str]) -> list[str]:
-    joined_header = _normalize_space(" ".join(cell for cell in header_row if cell)).lower()
-    first_cell = _normalize_space(header_row[0]).lower() if header_row else ""
-    lines: list[str] = []
-    for raw_line in page_text.splitlines():
-        line = _normalize_space(raw_line)
-        if not line:
-            continue
-        low = line.lower()
-        if joined_header and low == joined_header:
-            break
-        if first_cell and low.startswith(first_cell + " "):
-            break
-        if "fictional data" in low:
-            continue
-        lines.append(line)
-    return lines
+FLOW_FIELDS = {"revenue", "profit_after_tax", "ebit", "interest_expense"}
+BORROWING_FIELDS = {
+    "short_term_borrowings",
+    "long_term_borrowings",
+    "current_maturities",
+}
+ANNUAL = re.compile(
+    r"\b(?:years? ended|annual (?:period|profit and loss|income statement)|full april.march years?|(?:12|twelve) months ended|FY\s*\d{4})\b",
+    re.I,
+)
+INTERIM = re.compile(
+    r"\b(?:quarter\w*|interim|half.year\w*|half ended|year.to.date|YTD|(?:three|six|nine|[1-9]|1[01])[- ]months?)\b",
+    re.I,
+)
+INR_UNIT = re.compile(
+    r"(?:amounts? in |figures in |expressed in )?(?:INR|Indian rupees?|₹)\s*(?:in )?(rupees?|thousands?|lakhs?|crores?)?",
+    re.I,
+)
+
+
+def _borrowing_definition(field: str, label: str, notes: list[str]) -> list[str]:
+    evidence = [
+        line for line in [label, *notes] if re.search(r"leases?|maturit", line, re.I)
+    ]
+    terms = " ".join(evidence).lower()
+    if re.search(
+        r"\b(?:includ(?:e[ds]?|ing)|inclusive of|with|not exclud(?:e[ds]?|ing))\b[^.;]*?(?:lease|maturit)|(?:leases?|maturities) (?:are )?(?:included|not excluded)",
+        terms,
+    ):
+        return []
+    if not re.search(r"\bborrowings[ (]+exclud(?:e[ds]?|ing) leases?\b", terms):
+        return []
+    if field == "short_term_borrowings" and not re.search(
+        r"short[- ]term(?: borrowings)?[ (]+exclud(?:e[ds]?|ing) current maturities",
+        terms,
+    ):
+        return []
+    noncurrent = (
+        label.lower().replace("non current", "non-current").startswith("non-current")
+    )
+    if (
+        field == "long_term_borrowings"
+        and not noncurrent
+        and "excluding current maturities" not in label.lower()
+    ):
+        return []
+    return list(dict.fromkeys(evidence))
 
 
 def _resolve_page_context(
@@ -239,8 +283,12 @@ def _resolve_page_context(
             statement_title = line
             break
 
-    standalone_lines = [line for line in pre_table_lines if re.search(r"\bstandalone\b", line, re.I)]
-    consolidated_lines = [line for line in pre_table_lines if re.search(r"\bconsolidated\b", line, re.I)]
+    standalone_lines = [
+        line for line in pre_table_lines if re.search(r"\bstandalone\b", line, re.I)
+    ]
+    consolidated_lines = [
+        line for line in pre_table_lines if re.search(r"\bconsolidated\b", line, re.I)
+    ]
     if consolidated_lines:
         basis = None
         basis_context = consolidated_lines[0]
@@ -265,7 +313,15 @@ def _resolve_page_context(
             or line_invalid
             or any(
                 kw in low
-                for kw in ("year ended", "years ended", "april-march", "annual", "as at", "dates not supplied", "period")
+                for kw in (
+                    "year ended",
+                    "years ended",
+                    "april-march",
+                    "annual",
+                    "as at",
+                    "dates not supplied",
+                    "period",
+                )
             )
         ):
             period_lines.append(line)
@@ -275,36 +331,31 @@ def _resolve_page_context(
             context_invalid = context_invalid or line_invalid
     period_context = " ".join(period_lines) if period_lines else None
 
-    matched_units: list[str] = []
-    unit_lines: list[str] = []
-    for line in [*pre_table_lines, *header_row]:
-        line_matched = False
-        for pattern, unit_name in UNIT_PATTERNS:
-            for _ in pattern.finditer(line):
-                matched_units.append(unit_name)
-                line_matched = True
-        if UNSUPPORTED_UNIT_RE.search(line):
-            matched_units.append("unsupported")
-            line_matched = True
-        if line_matched and line not in unit_lines:
-            unit_lines.append(line)
-
-    unit_header = " ".join(unit_lines) if unit_lines else None
-    distinct_units = set(matched_units)
-    if not matched_units:
-        unit: Unit | None = None
-        multiplier: int | None = None
-        unit_issue: CandidateIssueCode | None = "missing_unit"
-    elif len(distinct_units) > 1 or "unsupported" in distinct_units:
-        unit = None
-        multiplier = None
-        unit_issue = "conflicting_unit"
-    else:
-        resolved_unit = matched_units[0]
-        assert resolved_unit in UNIT_MULTIPLIERS
-        unit = resolved_unit  # type: ignore[assignment]
-        multiplier = UNIT_MULTIPLIERS[resolved_unit]
-        unit_issue = None
+    unit_lines = [
+        line
+        for line in [*pre_table_lines, *header_row]
+        if any(pattern.search(line) for pattern, _ in UNIT_PATTERNS)
+        or re.search(r"\b(?:INR|currency)\b|₹", line, re.I)
+        or UNSUPPORTED_UNIT_RE.search(line)
+    ]
+    unit_header = " ".join(unit_lines) or None
+    units = set()
+    for line in unit_lines:
+        declaration = INR_UNIT.fullmatch(line.strip(" .()"))
+        if declaration:
+            scale = (declaration[1] or "rupees").lower()
+            units.add(
+                next(
+                    name for pattern, name in UNIT_PATTERNS if pattern.fullmatch(scale)
+                )
+            )
+        else:
+            units.add(None)
+    unit = next(iter(units)) if len(units) == 1 else None
+    multiplier = UNIT_MULTIPLIERS[unit] if unit else None
+    unit_issue = (
+        None if unit else ("conflicting_unit" if unit_lines else "missing_unit")
+    )
 
     return (
         statement_title,
@@ -346,6 +397,7 @@ def build_extraction_snapshot(
     extracted_char_count: int,
     raw_pages: list[tuple[int, str, list[list[list[str | None]]]]],
     *,
+    table_contexts: dict[tuple[int, int], tuple[str, str]],
     today: date | None = None,
 ) -> DocumentExtractionSnapshot:
     if today is None:
@@ -355,7 +407,7 @@ def build_extraction_snapshot(
     total_table_rows = 0
     total_table_cells = 0
     pages: list[ExtractedPage] = []
-    pending_rows: list[dict] = []
+    cells: list[dict] = []
     any_layout_a = False
     document_issues: list[str] = []
 
@@ -375,7 +427,10 @@ def build_extraction_snapshot(
                 continue
             page_row_count += len(raw_table)
             total_table_rows += len(raw_table)
-            if page_row_count > MAX_TABLE_ROWS_PER_PAGE or total_table_rows > MAX_TOTAL_TABLE_ROWS:
+            if (
+                page_row_count > MAX_TABLE_ROWS_PER_PAGE
+                or total_table_rows > MAX_TOTAL_TABLE_ROWS
+            ):
                 raise ExtractionLimitExceeded("Table rows exceed budget")
             clean_rows: list[list[str]] = []
             for raw_row in raw_table:
@@ -388,7 +443,9 @@ def build_extraction_snapshot(
                 for cell in raw_row:
                     text_cell = _normalize_space(cell or "")
                     if len(text_cell) > MAX_CELL_CHARS:
-                        raise ExtractionLimitExceeded("Table cell length exceeds budget")
+                        raise ExtractionLimitExceeded(
+                            "Table cell length exceeds budget"
+                        )
                     clean_row.append(text_cell)
                 clean_rows.append(clean_row)
             page_tables.append(ExtractedTable(table_index=table_idx, rows=clean_rows))
@@ -410,7 +467,14 @@ def build_extraction_snapshot(
             page_has_layout_a = True
             any_layout_a = True
             header_row = table.rows[0]
-            pre_lines = _extract_pre_table_lines(page_text, header_row)
+            heading, footer = table_contexts.get(
+                (page_number, table.table_index), ("", "")
+            )
+            pre_lines = [
+                line
+                for line in heading.splitlines()
+                if "fictional data" not in line.lower()
+            ]
             (
                 statement_title,
                 basis,
@@ -425,13 +489,14 @@ def build_extraction_snapshot(
                 unit_issue,
             ) = _resolve_page_context(pre_lines, header_row, today)
 
-            page_title = statement_title
-            page_basis = basis
-            page_basis_context = basis_context
-            page_period_context = period_context
-            page_unit = unit
-            page_multiplier = multiplier
-            page_unit_header = unit_header
+            if len(page_tables) == 1:
+                page_title = statement_title
+                page_basis = basis
+                page_basis_context = basis_context
+                page_period_context = period_context
+                page_unit = unit
+                page_multiplier = multiplier
+                page_unit_header = unit_header
 
             col_parsed: dict[int, tuple[list[int], bool]] = {
                 col: _parse_fiscal_years(header_row[col], today) for col in amount_cols
@@ -454,7 +519,9 @@ def build_extraction_snapshot(
                     col_resolution[col] = (None, "missing_period")
                 else:
                     yr = years[0]
-                    if (context_years and yr not in context_years) or yr in duplicate_col_years:
+                    if (
+                        context_years and yr not in context_years
+                    ) or yr in duplicate_col_years:
                         col_resolution[col] = (None, "conflicting_period")
                     else:
                         col_resolution[col] = (yr, None)
@@ -469,13 +536,31 @@ def build_extraction_snapshot(
                 label = row[0]
                 note = row[note_col] if note_col is not None else None
                 field = _map_label_to_field(label)
-                row_cells: list[dict] = []
+                evidence = source_context
+                mapping_issue = field is None
+                if field in BORROWING_FIELDS:
+                    definition = _borrowing_definition(
+                        field, label, [*pre_lines, *footer.splitlines()]
+                    )
+                    mapping_issue = not definition
+                    evidence = list(dict.fromkeys([*source_context, *definition]))
+
                 for col in amount_cols:
                     raw_val = row[col]
                     year_start, period_issue = col_resolution[col]
                     amount, amount_issue = _parse_amount_token(raw_val)
                     issues: list[CandidateIssueCode] = []
-                    if field is None:
+                    if field in FLOW_FIELDS and not period_issue:
+                        period = heading + " " + header_row[col]
+                        if INTERIM.search(period):
+                            year_start, period_issue = None, "conflicting_period"
+                        elif not ANNUAL.search(period):
+                            year_start, period_issue = None, "missing_period"
+                    if mapping_issue or (
+                        label.lower().strip(":.") == "loss after tax"
+                        and amount is not None
+                        and amount > 0
+                    ):
                         issues.append("ambiguous_mapping")
                     if basis_issue is not None:
                         issues.append(basis_issue)
@@ -485,7 +570,11 @@ def build_extraction_snapshot(
                         issues.append(unit_issue)
                     if amount_issue is not None:
                         issues.append(amount_issue)
-                    row_cells.append(
+                    if len(cells) >= MAX_CANDIDATES:
+                        raise ExtractionLimitExceeded(
+                            "Extracted candidates exceed budget"
+                        )
+                    cells.append(
                         dict(
                             page_number=page_number,
                             table_index=table.table_index,
@@ -496,7 +585,7 @@ def build_extraction_snapshot(
                             note=note,
                             raw=raw_val,
                             source_row=row,
-                            source_context=source_context,
+                            source_context=evidence,
                             period_header=header_row[col],
                             period_context=period_context,
                             year_start=year_start,
@@ -509,14 +598,6 @@ def build_extraction_snapshot(
                             issues=issues,
                         )
                     )
-                pending_rows.append(
-                    dict(
-                        page_number=page_number,
-                        table_index=table.table_index,
-                        field=field,
-                        cells=row_cells,
-                    )
-                )
 
         if not page_has_layout_a:
             page_issues.append("unsupported_layout")
@@ -537,63 +618,40 @@ def build_extraction_snapshot(
             )
         )
 
-    total_candidates = sum(len(item["cells"]) for item in pending_rows)
-    if total_candidates > MAX_CANDIDATES:
-        raise ExtractionLimitExceeded("Extracted candidates exceed budget")
-
-    rows_by_field: dict[str, list[dict]] = {}
-    for item in pending_rows:
-        if item["field"] is not None:
-            rows_by_field.setdefault(item["field"], []).append(item)
-
-    for field, matched_rows in rows_by_field.items():
-        if len(matched_rows) <= 1:
-            continue
-        years_seen: dict[int | tuple[str, int], list[tuple[Decimal | None, str]]] = {}
-        same_table_groups: dict[tuple[int, int], list[dict]] = {}
-        for item in matched_rows:
-            same_table_groups.setdefault((item["page_number"], item["table_index"]), []).append(item)
-            for idx, cell in enumerate(item["cells"]):
-                key: int | tuple[str, int] = (
-                    cell["year_start"] if cell["year_start"] is not None else ("col", idx)
-                )
-                years_seen.setdefault(key, []).append((cell["amount"], cell["raw"]))
-
-        has_overlap = any(len(vals) > 1 for vals in years_seen.values()) or any(
-            len(group) > 1 for group in same_table_groups.values()
-        )
-        if not has_overlap:
-            continue
-        has_conflict = any(
-            len({(amt, raw) for amt, raw in vals}) > 1
-            for vals in years_seen.values()
-            if len(vals) > 1
-        )
-        dup_issue: CandidateIssueCode = "conflicting_match" if has_conflict else "duplicate_match"
-        for item in matched_rows:
-            for cell in item["cells"]:
-                if dup_issue not in cell["issues"]:
-                    cell["issues"].append(dup_issue)
+    by_period = {}
+    for cell in cells:
+        if cell["field"] and cell["year_start"] is not None:
+            by_period.setdefault((cell["field"], cell["year_start"]), []).append(cell)
+    for matches in by_period.values():
+        if len(matches) > 1:
+            values = {(cell["amount"], cell["unit"]) for cell in matches}
+            issue = "duplicate_match" if len(values) == 1 else "conflicting_match"
+            for cell in matches:
+                cell["issues"].append(issue)
 
     candidates: list[ExtractedCandidate] = []
-    for item in pending_rows:
-        for cell in item["cells"]:
-            if not cell["issues"] and cell["amount"] is not None and cell["multiplier"] is not None:
-                normalized_inr = cell["amount"] * Decimal(cell["multiplier"])
-            else:
-                normalized_inr = None
-            candidates.append(
-                ExtractedCandidate(
-                    **cell,
-                    normalized_inr=normalized_inr,
-                    reviewed=False,
-                )
+    for cell in cells:
+        if (
+            not cell["issues"]
+            and cell["amount"] is not None
+            and cell["multiplier"] is not None
+        ):
+            normalized_inr = cell["amount"] * Decimal(cell["multiplier"])
+        else:
+            normalized_inr = None
+        candidates.append(
+            ExtractedCandidate(
+                **cell,
+                normalized_inr=normalized_inr,
+                reviewed=False,
             )
+        )
 
     if not any_layout_a:
         document_issues.append("unsupported_layout")
 
     return DocumentExtractionSnapshot(
+        schema_version="document-extraction-v2",
         document_sha256=document_sha256,
         layout="layout_a" if any_layout_a else "unsupported",
         page_count=len(pages),

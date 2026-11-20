@@ -59,6 +59,7 @@ def inspect(path: str) -> PdfInspectionResult:
             raise Rejected("encrypted_pdf")
         pages = chars = decoded_bytes = total_text_len = 0
         raw_pages: list[tuple[int, str, list[list[list[str | None]]]]] = []
+        table_contexts = {}
         for number, raw_page in enumerate(PDFPage.create_pages(pdf.doc), 1):
             if number > MAX_PDF_PAGES:
                 raise Rejected("too_many_pages")
@@ -78,9 +79,23 @@ def inspect(path: str) -> PdfInspectionResult:
                 chars += sum(not char.isspace() for char in page_text)
                 if chars > MAX_TEXT_CHARS:
                     raise Rejected("parser_resource_limit")
-                tables = page.extract_tables() or []
-                if len(tables) > MAX_TABLES_PER_PAGE:
+                found = sorted(page.find_tables(), key=lambda table: table.bbox[1])
+                if len(found) > MAX_TABLES_PER_PAGE:
                     raise Rejected("parser_resource_limit")
+                tables = [table.extract() for table in found]
+                # Only vertically separated tables have unambiguous heading bands.
+                previous_bottom = page.bbox[1]
+                for index, table in enumerate(found, 1):
+                    _, top, _, bottom = table.bbox
+                    left, _, right, _ = page.bbox
+                    heading = footer = ""
+                    overlaps_next = index < len(found) and found[index].bbox[1] < bottom
+                    if previous_bottom < top and not overlaps_next:
+                        heading = page.within_bbox((left, previous_bottom, right, top)).extract_text()
+                        if len(found) == 1 and bottom < page.bbox[3]:
+                            footer = page.within_bbox((left, bottom, right, page.bbox[3])).extract_text()
+                    table_contexts[number, index] = heading, footer
+                    previous_bottom = max(previous_bottom, bottom)
                 raw_pages.append((number, page_text, tables))
             finally:
                 page.close()
@@ -90,7 +105,7 @@ def inspect(path: str) -> PdfInspectionResult:
         if not chars:
             raise Rejected("scanned_only_pdf")
         try:
-            snapshot = build_extraction_snapshot(document_sha256, chars, raw_pages)
+            snapshot = build_extraction_snapshot(document_sha256, chars, raw_pages, table_contexts=table_contexts)
         except ExtractionLimitExceeded:
             raise Rejected("parser_resource_limit") from None
         return PdfInspectionResult(pages, chars, snapshot.model_dump(mode="json"))

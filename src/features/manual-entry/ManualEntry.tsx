@@ -2,11 +2,14 @@ import { AnalysisResults } from "../analysis/AnalysisResults";
 import {
   analyseWorkspace,
   deleteDocument,
+  documentFileUrl,
+  fetchDocumentExtraction,
   fetchDocuments,
   fetchBusinesses,
   fetchSession,
   fetchWorkspace,
   retryDocument,
+  runDocumentExtraction,
   saveWorkspace,
   signOut,
   submitCredentials,
@@ -15,11 +18,13 @@ import {
   type AnalysisResponse,
   type AnalysisRunSummary,
   type BusinessSummary,
+  type DocumentExtractionResponse,
   type DocumentSummary,
   type SessionUser,
   type WorkspaceResponse,
 } from "../analysis/api";
 import { useAnalysis } from "../analysis/use-analysis";
+import { SourceReview, type HighlightedCell } from "../documents/SourceReview";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
@@ -56,16 +61,19 @@ import {
   FINANCIAL_FIELDS,
   UNIT_ITEMS,
   YEAR_ITEMS,
+  applyCandidatesToForm,
   countReview,
   createEmptyForm,
   createExampleForm,
   createPeriod,
+  detachDocumentSource,
   financialYearLabel,
   firstErrorId,
   formFromRequest,
   hasEntries,
   hasErrors,
   immediatePrior,
+  isDocumentFigure,
   nextPeriodYear,
   presentFigures,
   resetBrokenComparability,
@@ -73,7 +81,10 @@ import {
   sortedPeriods,
   unitLabel,
   validateForm,
+  type CandidateImport,
   type FieldDefinition,
+  type FigureDraft,
+  type FigureSource,
   type FinancialFieldKey,
   type FormDraft,
   type FormErrors,
@@ -110,6 +121,10 @@ function ManualEntry() {
   const [documentBusy, setDocumentBusy] = useState(false);
   const [documentError, setDocumentError] = useState<string | null>(null);
   const [selectedPdf, setSelectedPdf] = useState<File | null>(null);
+  const [activeReview, setActiveReview] = useState<DocumentExtractionResponse | null>(null);
+  const [reviewPage, setReviewPage] = useState(1);
+  const [highlightedCell, setHighlightedCell] = useState<HighlightedCell | null>(null);
+  const [applyWarnings, setApplyWarnings] = useState<string[]>([]);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [replacement, setReplacement] = useState<Replacement | null>(null);
   const actionPending = useRef(true);
@@ -153,14 +168,21 @@ function ManualEntry() {
     setReplacement(null);
     const nextForm = formFromRequest(workspace.request);
     setForm(nextForm);
-    setActiveWorkspace((current) => ({
-      id: workspace.business_id,
-      revision: workspace.input_revision,
-      form: nextForm,
-      analysis: workspace.latest_analysis,
-      runs: workspace.runs ?? [],
-      documents: workspace.documents ?? (current?.id === workspace.business_id ? current.documents : []),
-    }));
+    setActiveWorkspace((current) => {
+      if (current && current.id !== workspace.business_id) {
+        setActiveReview(null);
+        setHighlightedCell(null);
+        setApplyWarnings([]);
+      }
+      return {
+        id: workspace.business_id,
+        revision: workspace.input_revision,
+        form: nextForm,
+        analysis: workspace.latest_analysis,
+        runs: workspace.runs ?? [],
+        documents: workspace.documents ?? (current?.id === workspace.business_id ? current.documents : []),
+      };
+    });
     setBusinesses((current) => {
       const summary: BusinessSummary = {
         id: workspace.business_id,
@@ -213,6 +235,9 @@ function ManualEntry() {
       setSession(null);
       setBusinesses([]);
       setActiveWorkspace(null);
+      setActiveReview(null);
+      setHighlightedCell(null);
+      setApplyWarnings([]);
       setWorkspaceError(null);
       setDocumentError(null);
       setSelectedPdf(null);
@@ -292,6 +317,10 @@ function ManualEntry() {
     try {
       const documents = await fetchDocuments(activeWorkspace.id);
       setActiveWorkspace((current) => current ? { ...current, documents } : current);
+      if (activeReview && !documents.some((item) => item.id === activeReview.id && item.status === "ready")) {
+        setActiveReview(null);
+        setHighlightedCell(null);
+      }
       setNotice("Document status refreshed. Your draft entries are kept.");
     } catch (error) {
       setDocumentError(error instanceof Error ? error.message : "Could not refresh document status.");
@@ -366,6 +395,130 @@ function ManualEntry() {
     }
   }
 
+  async function handleOpenReview(
+    documentId: string,
+    pageNumber = 1,
+    cell: HighlightedCell | null = null,
+  ) {
+    if (!activeWorkspace) return;
+    if (activeReview?.id === documentId) {
+      setReviewPage(pageNumber);
+      setHighlightedCell(cell);
+      requestAnimationFrame(() =>
+        document.getElementById("source-review-panel")?.scrollIntoView({ behavior: "smooth", block: "start" }),
+      );
+      return;
+    }
+    if (actionPending.current) return;
+    actionPending.current = true;
+    setDocumentBusy(true);
+    setDocumentError(null);
+    try {
+      const data = await fetchDocumentExtraction(activeWorkspace.id, documentId);
+      setActiveReview(data);
+      setReviewPage(pageNumber);
+      setHighlightedCell(cell);
+      requestAnimationFrame(() =>
+        document.getElementById("source-review-panel")?.scrollIntoView({ behavior: "smooth", block: "start" }),
+      );
+    } catch (error) {
+      setDocumentError(
+        error instanceof Error ? error.message : "Could not load extracted candidates.",
+      );
+    } finally {
+      actionPending.current = false;
+      setDocumentBusy(false);
+    }
+  }
+
+  async function handleRunExtraction(documentId: string) {
+    if (actionPending.current || !activeWorkspace) return;
+    actionPending.current = true;
+    setDocumentBusy(true);
+    setDocumentError(null);
+    try {
+      const updated = await runDocumentExtraction(activeWorkspace.id, documentId);
+      setActiveReview(updated);
+      setReviewPage(1);
+      setHighlightedCell(null);
+      setActiveWorkspace((current) =>
+        current
+          ? {
+              ...current,
+              documents: current.documents.map((item) =>
+                item.id === updated.id
+                  ? {
+                      id: updated.id,
+                      business_id: updated.business_id,
+                      filename: updated.filename,
+                      sha256: updated.sha256,
+                      byte_size: updated.byte_size,
+                      page_count: updated.page_count,
+                      extracted_char_count: updated.extracted_char_count,
+                      status: updated.status,
+                      error_code: updated.error_code,
+                      error_message: updated.error_message,
+                      created_at: updated.created_at,
+                      updated_at: updated.updated_at,
+                    }
+                  : item,
+              ),
+            }
+          : current,
+      );
+      setNotice(`Extraction finished for "${updated.filename}".`);
+    } catch (error) {
+      setDocumentError(
+        error instanceof Error ? error.message : "Could not extract candidates from PDF.",
+      );
+    } finally {
+      actionPending.current = false;
+      setDocumentBusy(false);
+    }
+  }
+
+  function handleApplyCandidates(candidates: CandidateImport[]) {
+    const result = applyCandidatesToForm(form, candidates);
+    if (result.applied > 0) {
+      setForm(result.form);
+      setShowErrors(false);
+    }
+    setApplyWarnings(result.skipped.map((item) => item.reason));
+    if (result.applied > 0) {
+      setNotice(
+        `Applied ${result.applied} extracted ${
+          result.applied === 1 ? "figure" : "figures"
+        } from PDF as unreviewed. Inspect and confirm them before relying on analysis.`,
+      );
+    } else if (result.skipped.length > 0) {
+      setNotice("No candidates were applied. Check the skip notices below.");
+    }
+  }
+
+  function handleJumpToField(
+    yearStart: number | null,
+    field: FinancialFieldKey | null,
+  ) {
+    if (!field) return;
+    const period =
+      yearStart !== null
+        ? form.periods.find((item) => item.yearStart === yearStart)
+        : form.periods[0];
+    if (!period) {
+      const label = FINANCIAL_FIELDS.find((item) => item.key === field)?.label ?? field;
+      setNotice(
+        `Add ${financialYearLabel(yearStart!)} in Financial years below to enter ${label} manually.`,
+      );
+      return;
+    }
+    const id = `figure-${period.id}-${field}`;
+    requestAnimationFrame(() => {
+      const el = document.getElementById(id);
+      el?.scrollIntoView({ behavior: "smooth", block: "center" });
+      el?.focus();
+    });
+  }
+
   async function handleDeleteDocument(documentId: string, filename: string) {
     if (actionPending.current || !activeWorkspace) return;
     actionPending.current = true;
@@ -373,13 +526,25 @@ function ManualEntry() {
     setDocumentError(null);
     try {
       await deleteDocument(activeWorkspace.id, documentId);
+      const detachedForm = detachDocumentSource(form, documentId);
+      const wasClean = activeWorkspace.form === form;
+      if (detachedForm !== form) {
+        setForm(detachedForm);
+      }
       setActiveWorkspace((current) =>
         current
           ? {
               ...current,
+              form: wasClean
+                ? detachedForm
+                : detachDocumentSource(current.form, documentId),
               documents: current.documents.filter((item) => item.id !== documentId),
             }
           : current,
+      );
+      setActiveReview((current) => (current?.id === documentId ? null : current));
+      setHighlightedCell((current) =>
+        activeReview?.id === documentId ? null : current,
       );
       setNotice(`Removed "${filename}" from workspace.`);
     } catch (error) {
@@ -396,6 +561,9 @@ function ManualEntry() {
     setReplacement(null);
     setForm(createEmptyForm());
     setActiveWorkspace(null);
+    setActiveReview(null);
+    setHighlightedCell(null);
+    setApplyWarnings([]);
     setSelectedPdf(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
     setShowErrors(false);
@@ -432,6 +600,10 @@ function ManualEntry() {
     field: FinancialFieldKey,
     raw: string,
   ) {
+    const targetPeriod = form.periods.find((p) => p.id === periodId);
+    const wasDocument = targetPeriod
+      ? isDocumentFigure(targetPeriod.figures[field])
+      : false;
     setForm((current) => ({
       ...current,
       periods: current.periods.map((period) =>
@@ -445,6 +617,43 @@ function ManualEntry() {
             }
           : period,
       ),
+    }));
+    setNotice(
+      wasDocument
+        ? "Edited figure converted from document source to manual entry (unreviewed)."
+        : null,
+    );
+  }
+
+  function toggleFigureReview(
+    periodId: string,
+    field: FinancialFieldKey,
+    checked: boolean,
+  ) {
+    if (checked) {
+      const nextErrors = validateForm(form);
+      if (nextErrors.figures[`${periodId}:${field}`]) {
+        setShowErrors(true);
+        requestAnimationFrame(() =>
+          document.getElementById(`figure-${periodId}-${field}`)?.focus(),
+        );
+        return;
+      }
+    }
+    setForm((current) => ({
+      ...current,
+      periods: current.periods.map((period) => {
+        if (period.id !== periodId) return period;
+        const fig = period.figures[field];
+        if (!fig.raw.trim()) return period;
+        return {
+          ...period,
+          figures: {
+            ...period.figures,
+            [field]: { ...fig, reviewed: checked },
+          },
+        };
+      }),
     }));
     setNotice(null);
   }
@@ -532,6 +741,9 @@ function ManualEntry() {
     setReplacement(null);
     setForm(createExampleForm());
     setActiveWorkspace(null);
+    setActiveReview(null);
+    setHighlightedCell(null);
+    setApplyWarnings([]);
     setShowErrors(false);
     setConfirmExample(false);
     setNotice(
@@ -910,14 +1122,27 @@ function ManualEntry() {
                       </div>
                       <div className="flex flex-wrap items-center gap-2">
                         {doc.status === "ready" ? (
-                          <a
-                            href={`/api/businesses/${encodeURIComponent(activeWorkspace.id)}/documents/${encodeURIComponent(doc.id)}/file`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="text-xs font-medium text-primary underline-offset-4 hover:underline"
-                          >
-                            View PDF
-                          </a>
+                          <>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              disabled={actionsDisabled}
+                              onClick={() => void handleOpenReview(doc.id)}
+                            >
+                              {activeReview?.id === doc.id
+                                ? "Reviewing"
+                                : "Review extracted figures"}
+                            </Button>
+                            <a
+                              href={documentFileUrl(activeWorkspace.id, doc.id)}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-xs font-medium text-primary underline-offset-4 hover:underline"
+                            >
+                              View PDF
+                            </a>
+                          </>
                         ) : null}
                         {doc.status === "failed" && doc.error_code !== "deletion_pending" ? (
                           <Button
@@ -950,6 +1175,41 @@ function ManualEntry() {
               )}
             </CardContent>
           </Card>
+        ) : null}
+
+        {session && activeWorkspace && activeReview ? (
+          <SourceReview
+            key={activeReview.id}
+            businessId={activeWorkspace.id}
+            extraction={activeReview}
+            activePage={reviewPage}
+            highlightedCell={highlightedCell}
+            disabled={actionsDisabled}
+            form={form}
+            onSelectPage={(page) => setReviewPage(page)}
+            onHighlightCell={(cell) => setHighlightedCell(cell)}
+            onRunExtraction={(docId) => void handleRunExtraction(docId)}
+            onApplyCandidates={handleApplyCandidates}
+            onJumpToField={handleJumpToField}
+            onClose={() => {
+              setActiveReview(null);
+              setHighlightedCell(null);
+            }}
+          />
+        ) : null}
+
+        {applyWarnings.length > 0 ? (
+          <Alert>
+            <HugeiconsIcon icon={Alert02Icon} />
+            <AlertTitle>Some PDF candidates were not applied</AlertTitle>
+            <AlertDescription className="col-start-2">
+              <ul className="list-disc space-y-1 pl-4">
+                {applyWarnings.map((warning, idx) => (
+                  <li key={idx}>{warning}</li>
+                ))}
+              </ul>
+            </AlertDescription>
+          </Alert>
         ) : null}
 
         {!session ? (
@@ -1086,6 +1346,7 @@ function ManualEntry() {
             {periods.map((period) => (
               <PeriodCard
                 key={period.id}
+                businessId={activeWorkspace?.id}
                 period={period}
                 periods={form.periods}
                 errors={errors}
@@ -1102,6 +1363,18 @@ function ManualEntry() {
                 onFigureChange={(field, raw) =>
                   updateFigure(period.id, field, raw)
                 }
+                onToggleFigureReview={(field, checked) =>
+                  toggleFigureReview(period.id, field, checked)
+                }
+                onInspectSource={(source) => {
+                  if (!source.document_id) return;
+                  void handleOpenReview(source.document_id, source.page_number, {
+                    page: source.page_number,
+                    table: source.table_index,
+                    row: source.row_index,
+                    col: source.column_index,
+                  });
+                }}
               />
             ))}
           </section>
@@ -1209,6 +1482,7 @@ function ManualEntry() {
           <AnalysisResults
             data={displayedAnalysis}
             businessName={form.businessName}
+            businessId={savedClean ? activeWorkspace.id : undefined}
             inputRevision={savedClean ? activeWorkspace.revision : undefined}
             runs={savedClean ? activeWorkspace.runs : undefined}
           />
@@ -1216,8 +1490,8 @@ function ManualEntry() {
 
         <footer className="space-y-1 pb-4 text-xs text-muted-foreground">
           <p>
-            Phase 2 protected workspaces · Financial rules are provisional
-            pending finance-reviewer validation.
+            Protected workspaces and page-linked source review · Financial rules
+            are provisional pending finance-reviewer validation.
           </p>
           <p>
             Cash generation is not assessed; no cash-flow statement is entered
@@ -1231,6 +1505,7 @@ function ManualEntry() {
 }
 
 type PeriodCardProps = {
+  businessId?: string;
   disabled: boolean;
   period: PeriodDraft;
   periods: PeriodDraft[];
@@ -1241,9 +1516,12 @@ type PeriodCardProps = {
   onUnitChange: (unit: Unit) => void;
   onComparableChange: (checked: boolean) => void;
   onFigureChange: (field: FinancialFieldKey, raw: string) => void;
+  onToggleFigureReview: (field: FinancialFieldKey, checked: boolean) => void;
+  onInspectSource: (source: FigureSource) => void;
 };
 
 function PeriodCard({
+  businessId,
   disabled,
   period,
   periods,
@@ -1254,6 +1532,8 @@ function PeriodCard({
   onUnitChange,
   onComparableChange,
   onFigureChange,
+  onToggleFigureReview,
+  onInspectSource,
 }: PeriodCardProps) {
   const prior = immediatePrior(periods, period);
   const usedYears = new Set(
@@ -1403,11 +1683,17 @@ function PeriodCard({
               {group.fields.map((field) => (
                 <FigureField
                   key={field.key}
+                  businessId={businessId}
+                  disabled={disabled}
                   periodId={period.id}
                   field={field}
                   figure={period.figures[field.key]}
                   error={errors.figures[`${period.id}:${field.key}`]}
                   onValueChange={(raw) => onFigureChange(field.key, raw)}
+                  onToggleReview={(checked) =>
+                    onToggleFigureReview(field.key, checked)
+                  }
+                  onInspectSource={onInspectSource}
                 />
               ))}
             </div>
@@ -1425,24 +1711,36 @@ function PeriodCard({
 }
 
 type FigureFieldProps = {
+  businessId?: string;
+  disabled: boolean;
   periodId: string;
   field: FieldDefinition;
-  figure: { raw: string; reviewed: boolean };
+  figure: FigureDraft;
   error: string | undefined;
   onValueChange: (raw: string) => void;
+  onToggleReview: (checked: boolean) => void;
+  onInspectSource: (source: FigureSource) => void;
 };
 
 function FigureField({
+  businessId,
+  disabled,
   periodId,
   field,
   figure,
   error,
   onValueChange,
+  onToggleReview,
+  onInspectSource,
 }: FigureFieldProps) {
   const inputId = `figure-${periodId}-${field.key}`;
+  const confirmId = `confirm-${periodId}-${field.key}`;
   const hintId = `${inputId}-hint`;
   const errorId = `${inputId}-error`;
   const describedBy = error ? `${hintId} ${errorId}` : hintId;
+  const hasValue = figure.raw.trim() !== "";
+  const docFigure = isDocumentFigure(figure);
+  const source = docFigure ? figure.source! : null;
 
   return (
     <div className="space-y-1.5">
@@ -1450,10 +1748,19 @@ function FigureField({
         <Label htmlFor={inputId} className="leading-snug">
           {field.label}
         </Label>
-        {figure.raw.trim() ? (
-          <Badge variant={figure.reviewed ? "secondary" : "outline"}>
-            {figure.reviewed ? "Confirmed" : "Unreviewed"}
-          </Badge>
+        {hasValue ? (
+          <div className="flex flex-wrap items-center gap-1.5">
+            <Badge variant="outline">
+              {source
+                ? source.document_id
+                  ? `PDF p. ${source.page_number}`
+                  : `PDF removed (p. ${source.page_number})`
+                : "Manual"}
+            </Badge>
+            <Badge variant={figure.reviewed ? "secondary" : "outline"}>
+              {figure.reviewed ? "Confirmed" : "Unreviewed"}
+            </Badge>
+          </div>
         ) : null}
       </div>
       <Input
@@ -1468,6 +1775,56 @@ function FigureField({
         aria-invalid={error ? true : undefined}
         aria-describedby={describedBy}
       />
+      {source ? (
+        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+          <span>
+            {source.document_id
+              ? `Document: ${source.filename} · p. ${source.page_number}`
+              : `Source PDF removed (was ${source.filename} · p. ${source.page_number})`}
+          </span>
+          {source.document_id ? (
+            <>
+              <Button
+                type="button"
+                variant="link"
+                size="xs"
+                className="h-auto p-0 text-xs"
+                disabled={disabled}
+                onClick={() => onInspectSource(source)}
+              >
+                Inspect p. {source.page_number}
+              </Button>
+              {businessId ? (
+                <a
+                  href={documentFileUrl(
+                    businessId,
+                    source.document_id,
+                    source.page_number,
+                  )}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-primary underline-offset-4 hover:underline"
+                >
+                  Open PDF
+                </a>
+              ) : null}
+            </>
+          ) : null}
+        </div>
+      ) : null}
+      {hasValue ? (
+        <div className="flex items-center gap-2 pt-0.5">
+          <Checkbox
+            id={confirmId}
+            disabled={disabled}
+            checked={figure.reviewed}
+            onCheckedChange={(checked) => onToggleReview(checked === true)}
+          />
+          <Label htmlFor={confirmId} className="text-xs font-normal text-muted-foreground">
+            Confirm {field.label.toLowerCase()}
+          </Label>
+        </div>
+      ) : null}
       <p id={hintId} className="text-xs text-muted-foreground">
         {field.hint}
       </p>
@@ -1503,6 +1860,8 @@ function ReviewPeriod({ period }: { period: PeriodDraft }) {
         <dl className="grid gap-x-4 gap-y-2 sm:grid-cols-2">
           {present.map((field) => {
             const figure = period.figures[field.key];
+            const docFig = isDocumentFigure(figure);
+            const src = docFig ? figure.source! : null;
             return (
               <div
                 key={field.key}
@@ -1510,6 +1869,13 @@ function ReviewPeriod({ period }: { period: PeriodDraft }) {
               >
                 <dt className="text-sm text-muted-foreground">
                   {field.label}
+                  <span className="block text-xs">
+                    {src
+                      ? src.document_id
+                        ? `Document · ${src.filename} p. ${src.page_number}`
+                        : `Source PDF removed · ${src.filename} p. ${src.page_number}`
+                      : "Manual entry"}
+                  </span>
                 </dt>
                 <dd className="flex shrink-0 flex-col items-end gap-1 text-right">
                   <span className="font-mono text-sm tabular-nums">

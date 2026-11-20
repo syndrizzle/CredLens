@@ -8,15 +8,120 @@ from sqlalchemy.engine import Connection
 
 from app.analysis import MULTIPLIERS, analyse
 from app.documents import list_documents
-from app.models import analysis_runs, businesses, figures, periods, revisions
+from app.models import analysis_runs, businesses, documents, figures, periods, revisions
 from app.schemas import (
     AnalysisRequest,
     AnalysisResponse,
     AnalysisRunResponse,
     AnalysisRunSummary,
     BusinessSummary,
+    DocumentExtractionSnapshot,
     WorkspaceResponse,
 )
+
+
+class InvalidFigureSourceError(Exception):
+    pass
+
+
+def _validate_document_sources(
+    connection: Connection,
+    owner_id: UUID,
+    business_id: UUID,
+    request: AnalysisRequest,
+    prior_periods: dict | None = None,
+) -> None:
+    doc_figures = [
+        (period, field, figure)
+        for period in request.periods
+        for field, figure in period.values.items()
+        if figure.origin == "document"
+    ]
+    if not doc_figures:
+        return
+    doc_ids = {
+        figure.source.document_id
+        for _, _, figure in doc_figures
+        if figure.source is not None and figure.source.document_id is not None
+    }
+    ready_docs: dict[UUID, tuple[str, set[tuple]]] = {}
+    if doc_ids:
+        rows = (
+            connection.execute(
+                select(documents.c.id, documents.c.filename, documents.c.extraction)
+                .where(
+                    documents.c.id.in_(doc_ids),
+                    documents.c.business_id == business_id,
+                    documents.c.owner_id == owner_id,
+                    documents.c.status == "ready",
+                )
+                .with_for_update(read=True, key_share=True)
+            )
+            .mappings()
+            .all()
+        )
+        for row in rows:
+            raw_extraction = row["extraction"]
+            if not isinstance(raw_extraction, dict):
+                continue
+            try:
+                snapshot = DocumentExtractionSnapshot.model_validate(raw_extraction)
+            except Exception:
+                continue
+            candidates = {
+                (
+                    c.field,
+                    c.year_start,
+                    c.unit,
+                    c.page_number,
+                    c.table_index,
+                    c.row_index,
+                    c.column_index,
+                    c.label,
+                    c.raw,
+                    c.amount,
+                )
+                for c in snapshot.candidates
+                if not c.issues and c.normalized_inr is not None
+            }
+            ready_docs[row["id"]] = (row["filename"], candidates)
+    for period, field, figure in doc_figures:
+        src = figure.source
+        assert src is not None
+        if src.document_id is None:
+            prev_period = (
+                prior_periods.get(period.year_start) if prior_periods else None
+            )
+            prev_fig = prev_period.values.get(field) if prev_period else None
+            if (
+                prev_period is None
+                or prev_fig is None
+                or prev_fig.origin != "document"
+                or prev_fig.source != src
+                or prev_period.unit != period.unit
+                or prev_fig.amount != figure.amount
+            ):
+                raise InvalidFigureSourceError(
+                    "Detached document reference can only be preserved unchanged from the saved workspace; edit the figure as manual instead."
+                )
+            continue
+        doc = ready_docs.get(src.document_id)
+        key = (
+            field,
+            period.year_start,
+            period.unit,
+            src.page_number,
+            src.table_index,
+            src.row_index,
+            src.column_index,
+            src.label,
+            src.raw_token,
+            figure.amount,
+        )
+        if doc is None or src.filename != doc[0] or key not in doc[1]:
+            raise InvalidFigureSourceError(
+                "Referenced source document is unavailable or does not match an extracted candidate for this business."
+            )
 
 
 def owned_business(
@@ -70,6 +175,7 @@ def _insert_periods(
                         curr_raw != prev_raw
                         or (curr_raw != "" and period.unit != prev_period.unit)
                         or figure.origin != prev_fig.origin
+                        or figure.source != prev_fig.source
                     )
                     base_rev = max(
                         prev_fig.revision,
@@ -89,6 +195,14 @@ def _insert_periods(
                         if figure.amount is None
                         else figure.amount * multiplier,
                         origin=figure.origin,
+                        source_document_id=figure.source.document_id
+                        if figure.source is not None
+                        else None,
+                        source_meta=figure.source.model_dump(
+                            mode="json", exclude={"document_id"}
+                        )
+                        if figure.source is not None
+                        else None,
                         reviewed=figure.reviewed,
                         reviewed_by=owner_id if figure.reviewed else None,
                         revision=fig_revision,
@@ -116,14 +230,19 @@ def _load_business_with_revision(
         )
         saved_periods = []
         for period in period_rows:
-            values = {
-                row["field"]: {
+            values = {}
+            for row in connection.execute(
+                select(figures).where(figures.c.period_id == period["id"])
+            ).mappings():
+                item = {
                     key: row[key] for key in ("raw", "origin", "reviewed", "revision")
                 }
-                for row in connection.execute(
-                    select(figures).where(figures.c.period_id == period["id"])
-                ).mappings()
-            }
+                if row["origin"] == "document" and row["source_meta"] is not None:
+                    item["source"] = {
+                        "document_id": row["source_document_id"],
+                        **row["source_meta"],
+                    }
+                values[row["field"]] = item
             saved_periods.append(
                 dict(
                     year_start=period["year_start"],
@@ -153,6 +272,7 @@ def save_business(
     connection: Connection, owner_id: UUID, request: AnalysisRequest
 ) -> UUID:
     business_id = uuid4()
+    _validate_document_sources(connection, owner_id, business_id, request)
     connection.execute(
         businesses.insert().values(
             id=business_id,
@@ -206,6 +326,9 @@ def update_business(
         )
     )
     prior_periods = {period.year_start: period for period in prior.periods}
+    _validate_document_sources(
+        connection, owner_id, business_id, request, prior_periods=prior_periods
+    )
     max_revisions: dict[tuple[int, str], int] = {}
     for period in prior.periods:
         for field, fig in period.values.items():

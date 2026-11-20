@@ -2,12 +2,13 @@ from unittest.mock import Mock
 from uuid import uuid4
 
 import pytest
+from app.database import get_engine
 from sqlalchemy import create_engine
 from sqlalchemy.engine import make_url
-
-from app.database import get_engine
 from test_persistence import (
     command,
+)
+from test_persistence import (
     test_populated_upgrade_and_preexisting_baseline_preserve_monotonic_revisions as run_populated_upgrade,
 )
 
@@ -27,20 +28,32 @@ def fixture_engine(monkeypatch, request):
     monkeypatch.setattr("app.database.load_dotenv", lambda *_args, **_kwargs: None)
     get_engine.cache_clear()
     engine = create_engine(make_url(url).set(drivername="postgresql+psycopg"))
-    monkeypatch.setattr(engine, "connect", Mock(side_effect=AssertionError("No database access is allowed in migration safety tests")))
+    monkeypatch.setattr(
+        engine,
+        "connect",
+        Mock(
+            side_effect=AssertionError(
+                "No database access is allowed in migration safety tests"
+            )
+        ),
+    )
     yield engine
     engine.dispose()
     get_engine.cache_clear()
 
 
 @pytest.mark.parametrize("inherited", ["application", "absent", "cached"])
-def test_migration_uses_fixture_database_despite_application_configuration(fixture_engine, monkeypatch, inherited):
+def test_migration_uses_fixture_database_despite_application_configuration(
+    fixture_engine, monkeypatch, inherited
+):
     if inherited == "absent":
         monkeypatch.delenv("DATABASE_URL_UNPOOLED", raising=False)
     else:
         monkeypatch.setenv("DATABASE_URL_UNPOOLED", APPLICATION_URL)
     if inherited == "cached":
-        get_engine(direct=True)  # No connection is opened; emulate an inherited engine cache.
+        get_engine(
+            direct=True
+        )  # No connection is opened; emulate an inherited engine cache.
 
     def stop_before_ddl(*_args):
         assert get_engine(direct=True).url == fixture_engine.url
@@ -56,8 +69,14 @@ def test_migration_uses_fixture_database_despite_application_configuration(fixtu
     upgrade.assert_not_called()
 
 
-@pytest.mark.parametrize("fixture_engine,unsafe_url", [(TEST_URL, APPLICATION_URL), (POOLED_URL, POOLED_URL)], indirect=["fixture_engine"])
-def test_migration_rejects_mismatched_or_pooled_database_before_ddl(fixture_engine, monkeypatch, unsafe_url):
+@pytest.mark.parametrize(
+    "fixture_engine,unsafe_url",
+    [(TEST_URL, APPLICATION_URL), (POOLED_URL, POOLED_URL)],
+    indirect=["fixture_engine"],
+)
+def test_migration_rejects_mismatched_or_pooled_database_before_ddl(
+    fixture_engine, monkeypatch, unsafe_url
+):
     monkeypatch.setenv("PERSISTENCE_TEST_URL", unsafe_url)
     downgrade, upgrade = Mock(), Mock()
     monkeypatch.setattr(command, "downgrade", downgrade)

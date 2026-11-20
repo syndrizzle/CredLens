@@ -105,11 +105,24 @@ figures = Table(
     Column("raw", String(64)),
     Column("normalized_inr", Numeric),
     Column("origin", String(20), nullable=False),
+    Column(
+        "source_document_id",
+        Uuid,
+        ForeignKey("documents.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    ),
+    Column("source_meta", JSONB(none_as_null=True), nullable=True),
     Column("reviewed", Boolean, nullable=False),
     Column("reviewed_by", Uuid, ForeignKey("owners.id")),
     Column("revision", Integer, nullable=False),
     CheckConstraint("revision > 0", name="figure_revision"),
-    CheckConstraint("origin = 'manual'", name="figure_origin"),
+    CheckConstraint("origin IN ('manual', 'document')", name="figure_origin"),
+    CheckConstraint(
+        "(origin = 'manual' AND source_document_id IS NULL AND source_meta IS NULL) "
+        "OR (origin = 'document' AND normalized_inr IS NOT NULL AND source_meta IS NOT NULL)",
+        name="figure_source",
+    ),
     CheckConstraint("NOT reviewed OR normalized_inr IS NOT NULL", name="figure_review"),
     CheckConstraint("reviewed = (reviewed_by IS NOT NULL)", name="figure_reviewer"),
     CheckConstraint(

@@ -14,10 +14,25 @@ export type FinancialFieldKey =
 
 export type Unit = "rupees" | "thousands" | "lakhs" | "crores";
 
+export type FigureOrigin = "manual" | "document";
+
+export type FigureSource = {
+  document_id: string | null;
+  filename: string;
+  page_number: number;
+  table_index: number;
+  row_index: number;
+  column_index: number;
+  label: string;
+  raw_token: string;
+};
+
 export type FigureDraft = {
   raw: string;
   reviewed: boolean;
   revision?: number;
+  origin?: FigureOrigin;
+  source?: FigureSource | null;
 };
 
 export type PeriodDraft = {
@@ -212,11 +227,167 @@ export function resetReview(
   figures: PeriodDraft["figures"],
 ): PeriodDraft["figures"] {
   return Object.fromEntries(
-    FINANCIAL_FIELDS.map((field) => [
-      field.key,
-      { ...figures[field.key], reviewed: false },
-    ]),
+    FINANCIAL_FIELDS.map((field) => {
+      const { origin: _origin, source: _source, ...rest } = figures[field.key];
+      return [field.key, { ...rest, reviewed: false }];
+    }),
   ) as PeriodDraft["figures"];
+}
+
+export function isDocumentFigure(figure: {
+  raw?: string | null;
+  origin?: FigureOrigin;
+  source?: FigureSource | null;
+}): boolean {
+  return (
+    Boolean(figure.raw?.trim()) &&
+    figure.origin === "document" &&
+    Boolean(figure.source)
+  );
+}
+
+export function detachDocumentSource(
+  form: FormDraft,
+  documentId: string,
+): FormDraft {
+  let changed = false;
+  const periods = form.periods.map((period) => {
+    let periodChanged = false;
+    const nextFigures = { ...period.figures };
+    for (const field of FINANCIAL_FIELDS) {
+      const fig = period.figures[field.key];
+      if (fig.origin === "document" && fig.source?.document_id === documentId) {
+        nextFigures[field.key] = {
+          ...fig,
+          source: { ...fig.source, document_id: null },
+        };
+        periodChanged = true;
+        changed = true;
+      }
+    }
+    return periodChanged ? { ...period, figures: nextFigures } : period;
+  });
+  return changed ? { ...form, periods } : form;
+}
+
+export type CandidateImport = {
+  field: FinancialFieldKey;
+  yearStart: number;
+  unit: Unit;
+  amount: string;
+  source: FigureSource;
+};
+
+export type CandidateApplyResult = {
+  form: FormDraft;
+  applied: number;
+  overwritten: number;
+  skipped: { field: FinancialFieldKey; yearStart: number; reason: string }[];
+};
+
+function isEmptyPlaceholderPeriod(periods: PeriodDraft[]): boolean {
+  return (
+    periods.length === 1 &&
+    !periods[0]!.comparableToPrior &&
+    presentFigures(periods[0]!).length === 0
+  );
+}
+
+export function countCandidateOverwrites(
+  form: FormDraft,
+  candidates: CandidateImport[],
+): number {
+  let count = 0;
+  for (const candidate of candidates) {
+    const period = form.periods.find((p) => p.yearStart === candidate.yearStart);
+    if (!period || period.unit !== candidate.unit) continue;
+    const existing = period.figures[candidate.field];
+    if (existing.raw.trim() !== "") count += 1;
+  }
+  return count;
+}
+
+export function applyCandidatesToForm(
+  form: FormDraft,
+  candidates: CandidateImport[],
+): CandidateApplyResult {
+  let periods = form.periods.map((period) => ({
+    ...period,
+    figures: { ...period.figures },
+  }));
+  let replacedPlaceholder = false;
+  let applied = 0;
+  let overwritten = 0;
+  const skipped: CandidateApplyResult["skipped"] = [];
+
+  for (const candidate of candidates) {
+    let index = periods.findIndex((p) => p.yearStart === candidate.yearStart);
+    if (index === -1) {
+      if (!replacedPlaceholder && isEmptyPlaceholderPeriod(periods)) {
+        periods = [{ ...createPeriod(candidate.yearStart), unit: candidate.unit }];
+        replacedPlaceholder = true;
+        index = 0;
+      } else if (periods.length < 3) {
+        periods = [
+          ...periods,
+          { ...createPeriod(candidate.yearStart), unit: candidate.unit },
+        ];
+        index = periods.length - 1;
+      } else {
+        skipped.push({
+          field: candidate.field,
+          yearStart: candidate.yearStart,
+          reason: `Workspace already has 3 financial years. Remove a year to import ${financialYearLabel(candidate.yearStart)}.`,
+        });
+        continue;
+      }
+    }
+
+    const period = periods[index]!;
+    if (period.unit !== candidate.unit) {
+      if (presentFigures(period).length === 0) {
+        periods[index] = { ...period, unit: candidate.unit };
+      } else {
+        skipped.push({
+          field: candidate.field,
+          yearStart: candidate.yearStart,
+          reason: `${financialYearLabel(candidate.yearStart)} uses ${unitLabel(period.unit)}, while this PDF candidate uses ${unitLabel(candidate.unit)}. Change the year's unit or enter the figure manually.`,
+        });
+        continue;
+      }
+    }
+
+    const target = periods[index]!;
+    const existing = target.figures[candidate.field];
+    if (existing.raw.trim() !== "") overwritten += 1;
+    const same =
+      existing.raw.trim() === candidate.amount &&
+      existing.origin === "document" &&
+      existing.source?.document_id === candidate.source.document_id &&
+      existing.source?.page_number === candidate.source.page_number &&
+      existing.source?.table_index === candidate.source.table_index &&
+      existing.source?.row_index === candidate.source.row_index &&
+      existing.source?.column_index === candidate.source.column_index;
+    target.figures[candidate.field] = {
+      raw: candidate.amount,
+      reviewed: false,
+      origin: "document",
+      source: candidate.source,
+      revision: same
+        ? (existing.revision ?? 1)
+        : existing.raw.trim() !== "" || existing.revision !== undefined
+          ? (existing.revision ?? 1) + 1
+          : 1,
+    };
+    applied += 1;
+  }
+
+  return {
+    form: applied > 0 ? { ...form, periods: resetBrokenComparability(periods) } : form,
+    applied,
+    overwritten,
+    skipped,
+  };
 }
 
 export function sortedPeriods(periods: PeriodDraft[]): PeriodDraft[] {
@@ -406,7 +577,8 @@ export type RequestPayload = {
           raw: string | null;
           reviewed: boolean;
           revision: number;
-          origin: "manual";
+          origin: FigureOrigin;
+          source?: FigureSource | null;
         }
       >
     >;
@@ -425,13 +597,25 @@ export function formFromRequest(request: RequestPayload): FormDraft {
         FINANCIAL_FIELDS.map((field) => {
           const item = period.values[field.key];
           const raw = item?.raw ?? "";
+          const fromDocument =
+            Boolean(raw.trim()) &&
+            item?.origin === "document" &&
+            Boolean(item?.source);
           return [
             field.key,
-            {
-              raw,
-              reviewed: Boolean(raw.trim()) && Boolean(item?.reviewed),
-              revision: item?.revision ?? 1,
-            },
+            fromDocument
+              ? {
+                  raw,
+                  reviewed: Boolean(item?.reviewed),
+                  revision: item?.revision ?? 1,
+                  origin: "document" as const,
+                  source: item!.source!,
+                }
+              : {
+                  raw,
+                  reviewed: Boolean(raw.trim()) && Boolean(item?.reviewed),
+                  revision: item?.revision ?? 1,
+                },
           ];
         }),
       ) as Record<FinancialFieldKey, FigureDraft>,

@@ -140,9 +140,126 @@ async function run() {
   })));
   check(text().includes("Ready") && text().includes("3 pages") && text().includes("View PDF"), "Retried PDF transitions to Ready with page count and View PDF link");
 
+  // P3-03 page-linked source review: open extraction, inspect page 2 cell, apply candidate, confirm individually, edit -> manual, and detach on PDF delete.
+  docPending = deferred();
+  await click(button("Review extracted figures"));
+  check(name().matches(":disabled"), "Opening source review locks competing actions");
+  await act(async () => docPending.resolve(Response.json({
+    id: "doc-1",
+    business_id: "a",
+    filename: "Aster_FY24.pdf",
+    sha256: "a".repeat(64),
+    byte_size: 16384,
+    page_count: 2,
+    extracted_char_count: 980,
+    status: "ready",
+    error_code: null,
+    error_message: null,
+    created_at: "2026-11-17T10:00:00Z",
+    updated_at: "2026-11-17T10:00:05Z",
+    extraction_status: "ready",
+    extraction_message: null,
+    extraction: {
+      schema_version: "document-extraction-v2",
+      document_sha256: "a".repeat(64),
+      layout: "layout_a",
+      page_count: 2,
+      extracted_char_count: 980,
+      issues: [],
+      pages: [
+        {
+          page_number: 1,
+          text: "Profit and Loss",
+          statement_title: "Statement of Profit and Loss",
+          basis: "standalone",
+          basis_context: "Standalone",
+          period_context: "FY 2024-25",
+          unit: "rupees",
+          multiplier: 1,
+          unit_header: "INR in Rupees",
+          issues: [],
+          tables: [{
+            table_index: 1,
+            rows: [
+              ["Particulars", "FY 2024-25"],
+              ["Revenue from operations", "1,25,00,000.00"],
+            ],
+          }],
+        },
+        {
+          page_number: 2,
+          text: "Balance Sheet",
+          statement_title: "Balance Sheet",
+          basis: "standalone",
+          basis_context: "Standalone",
+          period_context: "As at 31 March 2025",
+          unit: "rupees",
+          multiplier: 1,
+          unit_header: "INR in Rupees",
+          issues: [],
+          tables: [{
+            table_index: 1,
+            rows: [
+              ["Particulars", "FY 2024-25"],
+              ["Total current assets", "52,00,000.00"],
+            ],
+          }],
+        },
+      ],
+      candidates: [
+        {
+          page_number: 1, table_index: 1, row_index: 2, column_index: 2,
+          field: "revenue", label: "Revenue from operations", note: null, raw: "1,25,00,000.00",
+          source_row: ["Revenue from operations", "1,25,00,000.00"], source_context: ["P&L"],
+          period_header: "FY 2024-25", period_context: "FY 2024-25", year_start: 2024,
+          unit_header: "INR in Rupees", unit: "rupees", multiplier: 1,
+          basis: "standalone", basis_context: "Standalone",
+          amount: "12500000.00", normalized_inr: "12500000.00", reviewed: false, issues: [],
+        },
+        {
+          page_number: 2, table_index: 1, row_index: 2, column_index: 2,
+          field: "current_assets", label: "Total current assets", note: null, raw: "52,00,000.00",
+          source_row: ["Total current assets", "52,00,000.00"], source_context: ["BS"],
+          period_header: "FY 2024-25", period_context: "As at 31 March 2025", year_start: 2024,
+          unit_header: "INR in Rupees", unit: "rupees", multiplier: 1,
+          basis: "standalone", basis_context: "Standalone",
+          amount: "5200000.00", normalized_inr: "5200000.00", reviewed: false, issues: [],
+        },
+      ],
+    },
+  })));
+  check(Boolean(document.getElementById("source-review-panel")) && text().includes("Usable candidates (2)"), "Source review panel opens with extracted candidates");
+  await click(button("Inspect p. 2"));
+  check(document.querySelector('[data-selected="true"]')?.textContent?.includes("52,00,000.00"), "Inspect p. 2 switches source inspector to page 2 and highlights exact table cell");
+  await click(button("Apply all usable candidates (2)"));
+  check(text().includes("Replace 2 entered figures"), "Apply all asks for confirmation before overwriting entered figures");
+  await click(button("Apply and replace"));
+  check(text().includes("PDF p. 2") && text().includes("Document: Aster_FY24.pdf · p. 2"), "Applied candidates show document origin and page reference");
+
+  const currentAssetsInput = [...document.querySelectorAll<HTMLInputElement>('input[id^="figure-"][id$="-current_assets"]')].at(-1)!;
+  check(currentAssetsInput.value === "5200000.00", "Applied candidate populates the target financial figure input");
+  const currentAssetsConfirmId = currentAssetsInput.id.replace("figure-", "confirm-");
+  await click(document.getElementById(currentAssetsConfirmId)!);
+  const confirmEl = document.getElementById(currentAssetsConfirmId);
+  const isConfirmed =
+    confirmEl?.getAttribute("aria-checked") === "true" ||
+    confirmEl?.hasAttribute("data-checked") ||
+    (confirmEl as HTMLInputElement | null)?.checked === true;
+  check(isConfirmed && text().includes("1 of 24 present figures confirmed"), "Per-figure confirmation checkbox confirms a single figure");
+
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(currentAssetsInput, "5300000.00");
+    currentAssetsInput.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  check(text().includes("converted from document source to manual entry"), "Editing a document-sourced figure converts it to manual entry and resets review");
+  await click(button("Close review"));
+  check(!document.getElementById("source-review-panel"), "Close review dismisses source review panel");
+
+  pending = deferred();
   analysisPending = deferred();
   await click(button("Analyse figures"));
   check(name().matches(":disabled"), "Editor locked during saved analysis");
+  await act(async () => pending.resolve(Response.json(workspace("a", "Business a"))));
   await act(async () => analysisPending.resolve(Response.json(workspace("a", "Business a"))));
   await rename("Unsaved PDF review draft");
   docPending = deferred();

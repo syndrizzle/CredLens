@@ -3,15 +3,19 @@ import fixture from "../backend/tests/fixtures/aster_components.json";
 import {
   COMPLETED_YEARS,
   FINANCIAL_FIELDS,
+  applyCandidatesToForm,
+  countCandidateOverwrites,
   createEmptyForm,
   createExampleForm,
   createPeriod,
   countReview,
+  detachDocumentSource,
   financialYearLabel,
   firstErrorId,
   hasEntries,
   hasErrors,
   immediatePrior,
+  isDocumentFigure,
   latestCompletedYearStart,
   nextPeriodYear,
   presentFigures,
@@ -19,6 +23,7 @@ import {
   resetReview,
   sortedPeriods,
   validateForm,
+  type CandidateImport,
 } from "../src/features/manual-entry/model";
 
 const latest = latestCompletedYearStart();
@@ -163,9 +168,7 @@ describe("validation", () => {
     expect(errors.figures[`${period.id}:profit_after_tax`]).toBeUndefined();
     expect(errors.figures[`${period.id}:interest_expense`]).toBeUndefined();
     expect(errors.figures[`${period.id}:current_assets`]).toBeUndefined();
-    expect(firstErrorId(errors, form)).toBe(
-      `figure-${period.id}-revenue`,
-    );
+    expect(firstErrorId(errors, form)).toBe(`figure-${period.id}-revenue`);
   });
 
   test("tracks present figures and resets review without losing values", () => {
@@ -189,9 +192,9 @@ describe("validation", () => {
 
   test("detects entries before replacing the example", () => {
     expect(hasEntries(createEmptyForm())).toBe(false);
-    expect(
-      hasEntries({ ...createEmptyForm(), businessName: "Aster" }),
-    ).toBe(true);
+    expect(hasEntries({ ...createEmptyForm(), businessName: "Aster" })).toBe(
+      true,
+    );
     expect(
       hasEntries({
         ...createEmptyForm(),
@@ -230,11 +233,10 @@ describe("fictional example", () => {
       2023, 2024,
     ]);
     expect(form.periods.map((period) => period.comparableToPrior)).toEqual([
-      false, true,
-    ]);
-    expect(form.periods.every((period) => period.unit === "rupees")).toBe(
+      false,
       true,
-    );
+    ]);
+    expect(form.periods.every((period) => period.unit === "rupees")).toBe(true);
     expect(countReview(form.periods)).toEqual({ present: 24, reviewed: 0 });
     expect(hasErrors(validateForm(form))).toBe(false);
 
@@ -267,5 +269,97 @@ describe("fictional example", () => {
         );
       }
     }
+  });
+});
+
+describe("document candidate import and provenance", () => {
+  const sampleCandidate = (
+    overrides: Partial<CandidateImport> = {},
+  ): CandidateImport => ({
+    field: "revenue",
+    yearStart: 2024,
+    unit: "rupees",
+    amount: "12000000.00",
+    source: {
+      document_id: "doc-1",
+      filename: "aster-reference.pdf",
+      page_number: 1,
+      table_index: 1,
+      row_index: 2,
+      column_index: 3,
+      label: "Revenue from operations",
+      raw_token: "1,20,00,000.00",
+    },
+    ...overrides,
+  });
+
+  test("applies candidates replacing empty placeholder period, leaving figures unreviewed", () => {
+    const empty = { ...createEmptyForm(), businessName: "Aster" };
+    const result = applyCandidatesToForm(empty, [
+      sampleCandidate({ yearStart: 2023, amount: "10000000.00" }),
+      sampleCandidate({ yearStart: 2024, amount: "12000000.00" }),
+    ]);
+    expect(result.applied).toBe(2);
+    expect(result.overwritten).toBe(0);
+    expect(result.skipped).toHaveLength(0);
+    expect(result.form.periods.map((p) => p.yearStart)).toEqual([2023, 2024]);
+    const rev24 = result.form.periods[1]!.figures.revenue;
+    expect(rev24.raw).toBe("12000000.00");
+    expect(rev24.reviewed).toBe(false);
+    expect(isDocumentFigure(rev24)).toBe(true);
+    expect(rev24.source?.page_number).toBe(1);
+  });
+
+  test("counts overwrites and skips unit-conflicting or over-3-year candidates without silent coercion", () => {
+    const form = createExampleForm();
+    expect(countCandidateOverwrites(form, [sampleCandidate()])).toBe(1);
+
+    const unitMismatch = applyCandidatesToForm(form, [
+      sampleCandidate({ unit: "lakhs", amount: "120.00" }),
+    ]);
+    expect(unitMismatch.applied).toBe(0);
+    expect(unitMismatch.skipped).toHaveLength(1);
+    expect(unitMismatch.skipped[0]!.reason).toContain("Rupees");
+
+    const threeYears = {
+      businessName: "Aster",
+      periods: [createPeriod(2022), createPeriod(2023), createPeriod(2024)],
+    };
+    const overCap = applyCandidatesToForm(threeYears, [
+      sampleCandidate({ yearStart: 2021 }),
+    ]);
+    expect(overCap.applied).toBe(0);
+    expect(overCap.skipped[0]!.reason).toContain("3 financial years");
+  });
+
+  test("resetReview converts document figures to manual and detachDocumentSource clears only removed doc IDs", () => {
+    const applied = applyCandidatesToForm(createEmptyForm(), [
+      sampleCandidate(),
+      sampleCandidate({
+        field: "ebit",
+        amount: "1200000.00",
+        source: {
+          ...sampleCandidate().source,
+          document_id: "doc-2",
+          row_index: 4,
+        },
+      }),
+    ]).form;
+
+    const untouched = detachDocumentSource(applied, "doc-other");
+    expect(untouched).toBe(applied);
+
+    const detached = detachDocumentSource(applied, "doc-1");
+    expect(detached.periods[0]!.figures.revenue.source?.document_id).toBeNull();
+    expect(detached.periods[0]!.figures.revenue.source?.filename).toBe(
+      "aster-reference.pdf",
+    );
+    expect(detached.periods[0]!.figures.ebit.source?.document_id).toBe("doc-2");
+
+    const reset = resetReview(applied.periods[0]!.figures);
+    expect(isDocumentFigure(reset.revenue)).toBe(false);
+    expect(reset.revenue.origin).toBeUndefined();
+    expect(reset.revenue.source).toBeUndefined();
+    expect(reset.revenue.reviewed).toBe(false);
   });
 });

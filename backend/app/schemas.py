@@ -51,11 +51,37 @@ class Model(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False)
 
 
+class FigureSource(Model):
+    document_id: UUID | None = None
+    filename: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)
+    ]
+    page_number: int = Field(ge=1, le=50)
+    table_index: int = Field(ge=1, le=10)
+    row_index: int = Field(ge=2, le=250)
+    column_index: int = Field(ge=2, le=16)
+    label: str = Field(min_length=1, max_length=1_000)
+    raw_token: str = Field(min_length=1, max_length=1_000)
+
+    @field_validator("document_id", mode="before")
+    @classmethod
+    def parse_document_id(cls, value: object) -> UUID | None:
+        if value is None or isinstance(value, UUID):
+            return value
+        if isinstance(value, str):
+            try:
+                return UUID(value)
+            except ValueError:
+                pass
+        raise ValueError("Document ID must be a valid UUID or null")
+
+
 class FinancialValue(Model):
     raw: str | None = Field(default=None, max_length=64)
     reviewed: bool = False
     revision: int = Field(default=1, ge=1)
-    origin: Literal["manual"] = "manual"
+    origin: Literal["manual", "document"] = "manual"
+    source: FigureSource | None = None
 
     @field_validator("raw")
     @classmethod
@@ -77,6 +103,17 @@ class FinancialValue(Model):
     def check_review(self) -> Self:
         if self.reviewed and self.amount is None:
             raise ValueError("A missing figure cannot be marked reviewed")
+        if self.origin == "document":
+            if self.amount is None:
+                raise ValueError("A missing figure cannot have document origin")
+            if self.source is None:
+                raise ValueError(
+                    "Document-origin figures require a document source reference"
+                )
+        elif self.source is not None:
+            raise ValueError(
+                "Manual-origin figures must not include a document source reference"
+            )
         return self
 
 
@@ -298,6 +335,17 @@ UNIT_MULTIPLIERS: dict[str, int] = {
 }
 
 
+NOTE_HEADERS = {
+    "note",
+    "notes",
+    "note no",
+    "note no.",
+    "note ref",
+    "note reference",
+    "schedule",
+}
+
+
 class ExtractedTable(Model):
     table_index: int = Field(ge=1, le=10)
     rows: list[list[str]] = Field(min_length=1, max_length=250)
@@ -308,7 +356,9 @@ class ExtractedTable(Model):
             if not 1 <= len(row) <= 16:
                 raise ValueError("Extracted table rows must have 1 to 16 columns")
             if any(len(cell) > 1_000 for cell in row):
-                raise ValueError("Extracted table cells must not exceed 1,000 characters")
+                raise ValueError(
+                    "Extracted table cells must not exceed 1,000 characters"
+                )
         return self
 
 
@@ -328,7 +378,9 @@ class ExtractedPage(Model):
     @model_validator(mode="after")
     def check_page_unit(self) -> Self:
         if (self.unit is None) != (self.multiplier is None):
-            raise ValueError("Page unit and multiplier must both be set or both be null")
+            raise ValueError(
+                "Page unit and multiplier must both be set or both be null"
+            )
         if self.unit is not None and UNIT_MULTIPLIERS[self.unit] != self.multiplier:
             raise ValueError("Page unit and multiplier do not match")
         if sum(len(table.rows) for table in self.tables) > 250:
@@ -365,19 +417,25 @@ class ExtractedCandidate(Model):
     def parse_decimal_string(cls, value: object) -> Decimal | None:
         if value is None or isinstance(value, Decimal):
             return value
-        if isinstance(value, str) and re.fullmatch(r"-?[0-9]{1,23}(?:\.[0-9]{1,2})?", value):
+        if isinstance(value, str) and re.fullmatch(
+            r"-?[0-9]{1,23}(?:\.[0-9]{1,2})?", value
+        ):
             return Decimal(value)
         raise ValueError("Decimal fields require a canonical decimal string or Decimal")
 
     @model_validator(mode="after")
     def check_candidate(self) -> Self:
         if (self.unit is None) != (self.multiplier is None):
-            raise ValueError("Candidate unit and multiplier must both be set or both be null")
+            raise ValueError(
+                "Candidate unit and multiplier must both be set or both be null"
+            )
         if self.unit is not None and UNIT_MULTIPLIERS[self.unit] != self.multiplier:
             raise ValueError("Candidate unit and multiplier do not match")
         if self.issues:
             if self.normalized_inr is not None:
-                raise ValueError("Candidates with issues must not have a usable normalized INR value")
+                raise ValueError(
+                    "Candidates with issues must not have a usable normalized INR value"
+                )
         else:
             if (
                 self.field is None
@@ -388,14 +446,18 @@ class ExtractedCandidate(Model):
                 or self.amount is None
                 or self.normalized_inr is None
             ):
-                raise ValueError("Usable candidates require field, year, unit, multiplier, standalone basis, amount, and normalized INR")
+                raise ValueError(
+                    "Usable candidates require field, year, unit, multiplier, standalone basis, amount, and normalized INR"
+                )
             if self.normalized_inr != self.amount * Decimal(self.multiplier):
-                raise ValueError("Normalized INR must equal exact amount times multiplier")
+                raise ValueError(
+                    "Normalized INR must equal exact amount times multiplier"
+                )
         return self
 
 
 class DocumentExtractionSnapshot(Model):
-    schema_version: Literal["document-extraction-v1"] = "document-extraction-v1"
+    schema_version: Literal["document-extraction-v2"]
     document_sha256: Annotated[
         str, StringConstraints(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
     ]
@@ -410,20 +472,57 @@ class DocumentExtractionSnapshot(Model):
     def check_snapshot_bounds(self) -> Self:
         if len(self.pages) != self.page_count:
             raise ValueError("Page list length must match page_count")
-        if [page.page_number for page in self.pages] != list(range(1, self.page_count + 1)):
+        if [page.page_number for page in self.pages] != list(
+            range(1, self.page_count + 1)
+        ):
             raise ValueError("Pages must be numbered sequentially from 1 to page_count")
         if sum(len(page.text) for page in self.pages) > 350_000:
             raise ValueError("Total extracted text exceeds budget")
-        total_rows = sum(len(table.rows) for page in self.pages for table in page.tables)
-        total_cells = sum(len(row) for page in self.pages for table in page.tables for row in table.rows)
+        total_rows = sum(
+            len(table.rows) for page in self.pages for table in page.tables
+        )
+        total_cells = sum(
+            len(row)
+            for page in self.pages
+            for table in page.tables
+            for row in table.rows
+        )
         if total_rows > 2_000 or total_cells > 10_000:
             raise ValueError("Total extracted table rows or cells exceed budget")
+        tables = {
+            (p.page_number, t.table_index): t for p in self.pages for t in p.tables
+        }
+        if len(tables) != sum(len(p.tables) for p in self.pages):
+            raise ValueError("Duplicate table reference")
+        for candidate in self.candidates:
+            table = tables.get((candidate.page_number, candidate.table_index))
+            if table is None or not 2 <= candidate.row_index <= len(table.rows):
+                raise ValueError("Candidate refers to an absent source row")
+            row = table.rows[candidate.row_index - 1]
+            header = table.rows[0]
+            has_note = len(header) > 1 and header[1].lower().strip(":.") in NOTE_HEADERS
+            note = row[1] if has_note and len(row) > 1 else None
+            col = candidate.column_index - 1
+            if not (
+                (2 if has_note else 1) <= col < min(len(row), len(header))
+                and candidate.note == note
+                and candidate.source_row == row
+                and candidate.label == row[0]
+                and candidate.raw == row[col]
+                and candidate.period_header == header[col]
+            ):
+                raise ValueError("Candidate source cell differs from retained table")
         return self
 
 
 class DocumentExtractionResponse(DocumentSummary):
     extraction_status: Literal[
-        "ready", "not_extracted", "processing", "failed", "deletion_pending"
+        "ready",
+        "not_extracted",
+        "refresh_required",
+        "processing",
+        "failed",
+        "deletion_pending",
     ]
     extraction_message: str | None = None
     extraction: DocumentExtractionSnapshot | None = None
@@ -432,9 +531,13 @@ class DocumentExtractionResponse(DocumentSummary):
     def check_extraction_exposure(self) -> Self:
         if self.extraction_status == "ready":
             if self.status != "ready" or self.extraction is None:
-                raise ValueError("Ready extraction status requires ready document and snapshot")
+                raise ValueError(
+                    "Ready extraction status requires ready document and snapshot"
+                )
             if self.extraction.document_sha256 != self.sha256:
-                raise ValueError("Extraction snapshot hash does not match document sha256")
+                raise ValueError(
+                    "Extraction snapshot hash does not match document sha256"
+                )
         elif self.extraction is not None:
             raise ValueError("Non-ready extraction status must not expose a snapshot")
         return self

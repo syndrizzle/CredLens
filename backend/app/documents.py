@@ -29,8 +29,15 @@ from app.schemas import (
     DocumentSummary,
 )
 
+SUMMARY_COLUMNS = tuple(documents.c[key] for key in DocumentSummary.model_fields)
 READ_CHUNK_BYTES = 64 * 1024
-ALLOWED_CONTENT_TYPES = {"", "application/pdf", "application/x-pdf", "application/octet-stream", "binary/octet-stream"}
+ALLOWED_CONTENT_TYPES = {
+    "",
+    "application/pdf",
+    "application/x-pdf",
+    "application/octet-stream",
+    "binary/octet-stream",
+}
 PDF_ERRORS = {
     "encrypted_pdf": "Password-protected or encrypted PDFs are not supported.",
     "corrupted_pdf": "PDF could not be parsed. Check the file and upload it again.",
@@ -53,7 +60,11 @@ class DocumentRejectError(Exception):
 
 def get_storage_root() -> Path:
     configured = os.getenv("DOCUMENT_STORAGE_DIR", "").strip()
-    return Path(configured).resolve() if configured else (Path(__file__).resolve().parents[1] / ".storage" / "documents").resolve()
+    return (
+        Path(configured).resolve()
+        if configured
+        else (Path(__file__).resolve().parents[1] / ".storage" / "documents").resolve()
+    )
 
 
 def document_file_path(owner_id: UUID, business_id: UUID, document_id: UUID) -> Path:
@@ -121,20 +132,32 @@ def read_bounded_upload(stream: BinaryIO, content_type: str | None) -> bytes:
 
 
 def inspect_pdf_file(path: Path) -> PdfInspectionResult:
-    env = {key: value for key, value in os.environ.items()
-           if key in {"PATH", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "LANG", "LC_ALL"}}
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key in {"PATH", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "LANG", "LC_ALL"}
+    }
     try:
         result = subprocess.run(
             [sys.executable, "-m", "app.pdf_worker", str(path)],
-            cwd=Path(__file__).resolve().parents[1], env=env,
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=WALL_SECONDS,
+            cwd=Path(__file__).resolve().parents[1],
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=WALL_SECONDS,
         )
     except subprocess.TimeoutExpired:
-        raise DocumentRejectError(422, "parser_timeout", PDF_ERRORS["parser_timeout"]) from None
+        raise DocumentRejectError(
+            422, "parser_timeout", PDF_ERRORS["parser_timeout"]
+        ) from None
     except OSError:
-        raise DocumentRejectError(503, "parser_unavailable", PDF_ERRORS["parser_unavailable"]) from None
+        raise DocumentRejectError(
+            503, "parser_unavailable", PDF_ERRORS["parser_unavailable"]
+        ) from None
     if result.returncode or len(result.stdout) > MAX_WORKER_STDOUT_BYTES:
-        raise DocumentRejectError(422, "parser_resource_limit", PDF_ERRORS["parser_resource_limit"])
+        raise DocumentRejectError(
+            422, "parser_resource_limit", PDF_ERRORS["parser_resource_limit"]
+        )
     try:
         body = json.loads(result.stdout)
         if not isinstance(body, dict):
@@ -160,7 +183,9 @@ def inspect_pdf_file(path: Path) -> PdfInspectionResult:
     except DocumentRejectError:
         raise
     except Exception:
-        raise DocumentRejectError(503, "parser_unavailable", PDF_ERRORS["parser_unavailable"]) from None
+        raise DocumentRejectError(
+            503, "parser_unavailable", PDF_ERRORS["parser_unavailable"]
+        ) from None
 
 
 def inspect_pdf_bytes(data: bytes) -> PdfInspectionResult:
@@ -171,35 +196,68 @@ def inspect_pdf_bytes(data: bytes) -> PdfInspectionResult:
         return inspect_pdf_file(path)
 
 
-def _ensure_owned_business(connection: Connection, owner_id: UUID, business_id: UUID) -> None:
-    if connection.execute(select(businesses.c.id).where(
-        businesses.c.id == business_id, businesses.c.owner_id == owner_id)).scalar_one_or_none() is None:
+def _ensure_owned_business(
+    connection: Connection, owner_id: UUID, business_id: UUID
+) -> None:
+    if (
+        connection.execute(
+            select(businesses.c.id).where(
+                businesses.c.id == business_id, businesses.c.owner_id == owner_id
+            )
+        ).scalar_one_or_none()
+        is None
+    ):
         raise LookupError("Business not found")
 
 
 def _try_job_lock(connection: Connection, owner_id: UUID) -> bool:
-    key = int.from_bytes(hashlib.blake2b(owner_id.bytes, digest_size=8, person=b"credlens-pdf").digest(), signed=True)
+    key = int.from_bytes(
+        hashlib.blake2b(owner_id.bytes, digest_size=8, person=b"credlens-pdf").digest(),
+        signed=True,
+    )
     return connection.execute(select(func.pg_try_advisory_xact_lock(key))).scalar_one()
 
 
-def _mark_interrupted(connection: Connection, owner_id: UUID, business_id: UUID | None = None) -> None:
-    stmt = documents.update().where(documents.c.owner_id == owner_id, documents.c.status == "processing")
+def _mark_interrupted(
+    connection: Connection, owner_id: UUID, business_id: UUID | None = None
+) -> None:
+    stmt = documents.update().where(
+        documents.c.owner_id == owner_id, documents.c.status == "processing"
+    )
     if business_id is not None:
         stmt = stmt.where(documents.c.business_id == business_id)
-    connection.execute(stmt.values(status="failed", page_count=None, extracted_char_count=None,
-        error_code="interrupted_job", error_message="Processing was interrupted. Retry processing to continue.", updated_at=func.now()))
+    connection.execute(
+        stmt.values(
+            status="failed",
+            page_count=None,
+            extracted_char_count=None,
+            error_code="interrupted_job",
+            error_message="Processing was interrupted. Retry processing to continue.",
+            updated_at=func.now(),
+        )
+    )
 
 
-def reconcile_interrupted_documents(connection: Connection, owner_id: UUID, business_id: UUID | None = None) -> None:
-    stmt = select(documents.c.id).where(documents.c.owner_id == owner_id, documents.c.status == "processing").limit(1)
+def reconcile_interrupted_documents(
+    connection: Connection, owner_id: UUID, business_id: UUID | None = None
+) -> None:
+    stmt = (
+        select(documents.c.id)
+        .where(documents.c.owner_id == owner_id, documents.c.status == "processing")
+        .limit(1)
+    )
     if business_id is not None:
         stmt = stmt.where(documents.c.business_id == business_id)
-    if connection.execute(stmt).first() is not None and _try_job_lock(connection, owner_id):
+    if connection.execute(stmt).first() is not None and _try_job_lock(
+        connection, owner_id
+    ):
         _mark_interrupted(connection, owner_id, business_id)
 
 
 @contextmanager
-def _document_job(engine: Engine, owner_id: UUID, business_id: UUID, document_id: UUID | None = None):
+def _document_job(
+    engine: Engine, owner_id: UUID, business_id: UUID, document_id: UUID | None = None
+):
     # A transaction-scoped advisory lock also works through Neon's transaction pooler.
     with engine.begin() as gate:
         if document_id is None:
@@ -207,7 +265,11 @@ def _document_job(engine: Engine, owner_id: UUID, business_id: UUID, document_id
         else:
             _owned_document(gate, owner_id, business_id, document_id)
         if not _try_job_lock(gate, owner_id):
-            raise DocumentRejectError(409, "active_job_exists", "Another PDF job is active. Wait for it to finish.")
+            raise DocumentRejectError(
+                409,
+                "active_job_exists",
+                "Another PDF job is active. Wait for it to finish.",
+            )
         with engine.begin() as connection:
             _mark_interrupted(connection, owner_id)
         yield
@@ -249,8 +311,19 @@ def _row_to_extraction_response(row) -> DocumentExtractionResponse:
             extraction_message="Document was uploaded before candidate extraction. Run extraction to inspect source pages and candidates.",
             extraction=None,
         )
+    if raw_extraction.get("schema_version") == "document-extraction-v1":
+        return DocumentExtractionResponse(
+            **base,
+            extraction_status="refresh_required",
+            extraction=None,
+            extraction_message="Run extraction again to review candidates with the current rules.",
+        )
     snapshot = DocumentExtractionSnapshot.model_validate(raw_extraction)
-    usable = sum(1 for candidate in snapshot.candidates if candidate.normalized_inr is not None and not candidate.issues)
+    usable = sum(
+        1
+        for candidate in snapshot.candidates
+        if candidate.normalized_inr is not None and not candidate.issues
+    )
     if snapshot.layout == "unsupported" or not snapshot.candidates:
         message = "No supported financial table layout was recognized. Enter or confirm figures manually."
     elif usable == 0:
@@ -265,20 +338,44 @@ def _row_to_extraction_response(row) -> DocumentExtractionResponse:
     )
 
 
-def _owned_document(connection: Connection, owner_id: UUID, business_id: UUID, document_id: UUID):
+def _owned_document(
+    connection: Connection,
+    owner_id: UUID,
+    business_id: UUID,
+    document_id: UUID,
+    *,
+    extraction: bool = False,
+):
     _ensure_owned_business(connection, owner_id, business_id)
-    row = connection.execute(select(documents).where(documents.c.id == document_id,
-        documents.c.business_id == business_id, documents.c.owner_id == owner_id)).mappings().one_or_none()
+    columns = (
+        (*SUMMARY_COLUMNS, documents.c.extraction) if extraction else SUMMARY_COLUMNS
+    )
+    row = (
+        connection.execute(
+            select(*columns).where(
+                documents.c.id == document_id,
+                documents.c.business_id == business_id,
+                documents.c.owner_id == owner_id,
+            )
+        )
+        .mappings()
+        .one_or_none()
+    )
     if row is None:
         raise LookupError("Document not found")
     return row
 
 
-def list_documents(connection: Connection, owner_id: UUID, business_id: UUID) -> list[DocumentSummary]:
+def list_documents(
+    connection: Connection, owner_id: UUID, business_id: UUID
+) -> list[DocumentSummary]:
     _ensure_owned_business(connection, owner_id, business_id)
     reconcile_interrupted_documents(connection, owner_id, business_id)
-    rows = connection.execute(select(documents).where(documents.c.business_id == business_id,
-        documents.c.owner_id == owner_id).order_by(documents.c.created_at.desc(), documents.c.id.desc())).mappings()
+    rows = connection.execute(
+        select(*SUMMARY_COLUMNS)
+        .where(documents.c.business_id == business_id, documents.c.owner_id == owner_id)
+        .order_by(documents.c.created_at.desc(), documents.c.id.desc())
+    ).mappings()
     return [_row_to_summary(row) for row in rows]
 
 
@@ -286,7 +383,9 @@ def _write_pdf_atomically(target: Path, data: bytes) -> None:
     target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     tmp_path = target.with_suffix(".tmp")
     try:
-        with os.fdopen(os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as output:
+        with os.fdopen(
+            os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb"
+        ) as output:
             output.write(data)
         os.replace(tmp_path, target)
     except Exception:
@@ -307,21 +406,33 @@ def _remove_file_and_empty_dirs(target: Path) -> None:
         parent = parent.parent
 
 
-def _finish_processing(engine: Engine, document_id: UUID, path: Path) -> DocumentSummary:
+def _finish_processing(
+    engine: Engine, document_id: UUID, path: Path
+) -> DocumentSummary:
     try:
         if not path.is_file():
-            raise DocumentRejectError(422, "missing_storage_file", "Stored PDF is unavailable. Remove and re-upload it.")
+            raise DocumentRejectError(
+                422,
+                "missing_storage_file",
+                "Stored PDF is unavailable. Remove and re-upload it.",
+            )
         inspected = inspect_pdf_file(path)
         pages, chars = inspected
         raw_extraction = getattr(inspected, "extraction", None)
         if not isinstance(raw_extraction, dict):
-            raise DocumentRejectError(503, "parser_unavailable", PDF_ERRORS["parser_unavailable"])
+            raise DocumentRejectError(
+                503, "parser_unavailable", PDF_ERRORS["parser_unavailable"]
+            )
         try:
             snapshot = DocumentExtractionSnapshot.model_validate(raw_extraction)
         except Exception:
-            raise DocumentRejectError(503, "parser_unavailable", PDF_ERRORS["parser_unavailable"]) from None
+            raise DocumentRejectError(
+                503, "parser_unavailable", PDF_ERRORS["parser_unavailable"]
+            ) from None
         if snapshot.page_count != pages or snapshot.extracted_char_count != chars:
-            raise DocumentRejectError(503, "parser_unavailable", PDF_ERRORS["parser_unavailable"])
+            raise DocumentRejectError(
+                503, "parser_unavailable", PDF_ERRORS["parser_unavailable"]
+            )
         values = dict(
             status="ready",
             page_count=pages,
@@ -331,10 +442,18 @@ def _finish_processing(engine: Engine, document_id: UUID, path: Path) -> Documen
             error_message=None,
         )
     except DocumentRejectError as exc:
-        values = dict(status="failed", page_count=None, extracted_char_count=None, error_code=exc.code, error_message=exc.message)
+        values = dict(
+            status="failed",
+            page_count=None,
+            extracted_char_count=None,
+            error_code=exc.code,
+            error_message=exc.message,
+        )
     with engine.begin() as connection:
         if values["status"] == "ready":
-            stored_sha = connection.execute(select(documents.c.sha256).where(documents.c.id == document_id)).scalar_one()
+            stored_sha = connection.execute(
+                select(documents.c.sha256).where(documents.c.id == document_id)
+            ).scalar_one()
             if values["extraction"]["document_sha256"] != stored_sha:
                 values = dict(
                     status="failed",
@@ -343,14 +462,28 @@ def _finish_processing(engine: Engine, document_id: UUID, path: Path) -> Documen
                     error_code="corrupted_pdf",
                     error_message=PDF_ERRORS["corrupted_pdf"],
                 )
-        row = connection.execute(documents.update().where(documents.c.id == document_id)
-            .values(**values, updated_at=func.now()).returning(documents)).mappings().one()
+        row = (
+            connection.execute(
+                documents.update()
+                .where(documents.c.id == document_id)
+                .values(**values, updated_at=func.now())
+                .returning(*SUMMARY_COLUMNS)
+            )
+            .mappings()
+            .one()
+        )
         summary = _row_to_summary(row)
     return summary
 
 
-def upload_and_process_document(engine: Engine, owner_id: UUID, business_id: UUID,
-                                filename: str | None, content_type: str | None, stream: BinaryIO) -> DocumentSummary:
+def upload_and_process_document(
+    engine: Engine,
+    owner_id: UUID,
+    business_id: UUID,
+    filename: str | None,
+    content_type: str | None,
+    stream: BinaryIO,
+) -> DocumentSummary:
     with _document_job(engine, owner_id, business_id):
         name = sanitize_pdf_filename(filename)
         data = read_bounded_upload(stream, content_type)
@@ -358,39 +491,84 @@ def upload_and_process_document(engine: Engine, owner_id: UUID, business_id: UUI
         path = document_file_path(owner_id, business_id, document_id)
         # Commit metadata before writing: a crash can leave a recoverable row, never an untracked file.
         with engine.begin() as connection:
-            connection.execute(documents.insert().values(id=document_id, owner_id=owner_id, business_id=business_id,
-                filename=name, sha256=hashlib.sha256(data).hexdigest(), byte_size=len(data), status="processing"))
+            connection.execute(
+                documents.insert().values(
+                    id=document_id,
+                    owner_id=owner_id,
+                    business_id=business_id,
+                    filename=name,
+                    sha256=hashlib.sha256(data).hexdigest(),
+                    byte_size=len(data),
+                    status="processing",
+                )
+            )
         try:
             _write_pdf_atomically(path, data)
         except OSError:
             with engine.begin() as connection:
-                row = connection.execute(documents.update().where(documents.c.id == document_id)
-                    .values(status="failed", error_code="storage_unavailable", error_message="PDF storage failed. Remove and re-upload the file.", updated_at=func.now())
-                    .returning(documents)).mappings().one()
+                row = (
+                    connection.execute(
+                        documents.update()
+                        .where(documents.c.id == document_id)
+                        .values(
+                            status="failed",
+                            error_code="storage_unavailable",
+                            error_message="PDF storage failed. Remove and re-upload the file.",
+                            updated_at=func.now(),
+                        )
+                        .returning(*SUMMARY_COLUMNS)
+                    )
+                    .mappings()
+                    .one()
+                )
                 summary = _row_to_summary(row)
             return summary
         return _finish_processing(engine, document_id, path)
 
 
-def retry_document_processing(engine: Engine, owner_id: UUID, business_id: UUID, document_id: UUID) -> DocumentSummary:
+def retry_document_processing(
+    engine: Engine, owner_id: UUID, business_id: UUID, document_id: UUID
+) -> DocumentSummary:
     with _document_job(engine, owner_id, business_id, document_id):
         with engine.begin() as connection:
             row = _owned_document(connection, owner_id, business_id, document_id)
             if row["status"] == "ready" or row["error_code"] == "deletion_pending":
-                raise DocumentRejectError(409, "not_retryable", "Document is ready or pending removal; refresh its status.")
-            connection.execute(documents.update().where(documents.c.id == document_id)
-                .values(status="processing", page_count=None, extracted_char_count=None, error_code=None, error_message=None, updated_at=func.now()))
-        return _finish_processing(engine, document_id, document_file_path(owner_id, business_id, document_id))
+                raise DocumentRejectError(
+                    409,
+                    "not_retryable",
+                    "Document is ready or pending removal; refresh its status.",
+                )
+            connection.execute(
+                documents.update()
+                .where(documents.c.id == document_id)
+                .values(
+                    status="processing",
+                    page_count=None,
+                    extracted_char_count=None,
+                    error_code=None,
+                    error_message=None,
+                    updated_at=func.now(),
+                )
+            )
+        return _finish_processing(
+            engine, document_id, document_file_path(owner_id, business_id, document_id)
+        )
 
 
-def get_document_extraction(connection: Connection, owner_id: UUID, business_id: UUID, document_id: UUID) -> DocumentExtractionResponse:
+def get_document_extraction(
+    connection: Connection, owner_id: UUID, business_id: UUID, document_id: UUID
+) -> DocumentExtractionResponse:
     _owned_document(connection, owner_id, business_id, document_id)
     reconcile_interrupted_documents(connection, owner_id, business_id)
-    row = _owned_document(connection, owner_id, business_id, document_id)
+    row = _owned_document(
+        connection, owner_id, business_id, document_id, extraction=True
+    )
     return _row_to_extraction_response(row)
 
 
-def extract_ready_document(engine: Engine, owner_id: UUID, business_id: UUID, document_id: UUID) -> DocumentExtractionResponse:
+def extract_ready_document(
+    engine: Engine, owner_id: UUID, business_id: UUID, document_id: UUID
+) -> DocumentExtractionResponse:
     with _document_job(engine, owner_id, business_id, document_id):
         with engine.begin() as connection:
             row = _owned_document(connection, owner_id, business_id, document_id)
@@ -400,15 +578,31 @@ def extract_ready_document(engine: Engine, owner_id: UUID, business_id: UUID, do
                     "document_not_ready",
                     "Document must be ready before running extraction; retry failed processing first.",
                 )
-            connection.execute(documents.update().where(documents.c.id == document_id)
-                .values(status="processing", page_count=None, extracted_char_count=None, error_code=None, error_message=None, updated_at=func.now()))
-        _finish_processing(engine, document_id, document_file_path(owner_id, business_id, document_id))
+            connection.execute(
+                documents.update()
+                .where(documents.c.id == document_id)
+                .values(
+                    status="processing",
+                    page_count=None,
+                    extracted_char_count=None,
+                    error_code=None,
+                    error_message=None,
+                    updated_at=func.now(),
+                )
+            )
+        _finish_processing(
+            engine, document_id, document_file_path(owner_id, business_id, document_id)
+        )
         with engine.begin() as connection:
-            row = _owned_document(connection, owner_id, business_id, document_id)
+            row = _owned_document(
+                connection, owner_id, business_id, document_id, extraction=True
+            )
             return _row_to_extraction_response(row)
 
 
-def get_document_file(connection: Connection, owner_id: UUID, business_id: UUID, document_id: UUID) -> tuple[DocumentSummary, Path]:
+def get_document_file(
+    connection: Connection, owner_id: UUID, business_id: UUID, document_id: UUID
+) -> tuple[DocumentSummary, Path]:
     row = _owned_document(connection, owner_id, business_id, document_id)
     path = document_file_path(owner_id, business_id, document_id)
     if row["status"] != "ready" or not path.is_file():
@@ -416,16 +610,32 @@ def get_document_file(connection: Connection, owner_id: UUID, business_id: UUID,
     return _row_to_summary(row), path
 
 
-def delete_document(engine: Engine, owner_id: UUID, business_id: UUID, document_id: UUID) -> None:
+def delete_document(
+    engine: Engine, owner_id: UUID, business_id: UUID, document_id: UUID
+) -> None:
     with _document_job(engine, owner_id, business_id, document_id):
         with engine.begin() as connection:
             _owned_document(connection, owner_id, business_id, document_id)
-            connection.execute(documents.update().where(documents.c.id == document_id)
-                .values(status="failed", error_code="deletion_pending", error_message="Removal is pending. Use Remove again to finish.", updated_at=func.now()))
+            connection.execute(
+                documents.update()
+                .where(documents.c.id == document_id)
+                .values(
+                    status="failed",
+                    error_code="deletion_pending",
+                    error_message="Removal is pending. Use Remove again to finish.",
+                    updated_at=func.now(),
+                )
+            )
         # No unlink happens until the removal intent has successfully committed.
         try:
-            _remove_file_and_empty_dirs(document_file_path(owner_id, business_id, document_id))
+            _remove_file_and_empty_dirs(
+                document_file_path(owner_id, business_id, document_id)
+            )
         except OSError:
-            raise DocumentRejectError(503, "deletion_pending", "Removal is pending. Use Remove again to finish.") from None
+            raise DocumentRejectError(
+                503,
+                "deletion_pending",
+                "Removal is pending. Use Remove again to finish.",
+            ) from None
         with engine.begin() as connection:
             connection.execute(documents.delete().where(documents.c.id == document_id))

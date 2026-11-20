@@ -58,7 +58,7 @@ def evidence(period: FinancialPeriod, field: FinancialField) -> InputEvidence:
         year_start=period.year_start,
         field=field,
         unit=period.unit,
-        figure=figure.model_copy(),
+        figure=figure.model_copy(deep=True),
         normalized_inr=None if amount is None else amount * MULTIPLIERS[period.unit],
     )
 

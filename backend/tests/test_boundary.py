@@ -222,7 +222,17 @@ def test_decimal_result_serialization_and_state_invariants():
     )
     assert unsupported.model_dump(mode="json")["value"] is None
     with pytest.raises(ValidationError, match="six indicators"):
-        PeriodAnalysis(year_start=2023, indicators=[result] * 6, balance_check={"state": "Not assessed", "difference_inr": None, "tolerance_inr": Decimal("0.015"), "inputs": [], "reasons": []})
+        PeriodAnalysis(
+            year_start=2023,
+            indicators=[result] * 6,
+            balance_check={
+                "state": "Not assessed",
+                "difference_inr": None,
+                "tolerance_inr": Decimal("0.015"),
+                "inputs": [],
+                "reasons": [],
+            },
+        )
 
 
 @pytest.mark.parametrize("today,status", [("2026-03-31", 422), ("2026-04-01", 200)])
@@ -251,3 +261,65 @@ def test_reference_fixture_validates_without_changing_amounts(client):
     response = client.post("/api/validate", json=request)
     assert response.status_code == 200
     assert response.json() == validated.model_dump(mode="json")
+
+
+def test_document_origin_figure_source_validation_and_analysis(client, payload):
+    source = {
+        "document_id": "11111111-1111-1111-1111-111111111111",
+        "filename": "aster-reference.pdf",
+        "page_number": 1,
+        "table_index": 1,
+        "row_index": 2,
+        "column_index": 3,
+        "label": "Revenue from operations",
+        "raw_token": "1,20,00,000.00",
+    }
+    payload["periods"][0]["values"]["revenue"] = {
+        "raw": "12000000.00",
+        "reviewed": True,
+        "revision": 1,
+        "origin": "document",
+        "source": source,
+    }
+    res = client.post("/api/validate", json=payload)
+    assert res.status_code == 200
+    assert res.json()["periods"][0]["values"]["revenue"]["origin"] == "document"
+    assert res.json()["periods"][0]["values"]["revenue"]["source"] == source
+
+    # Analysis preserves document origin and source metadata on InputEvidence.
+    ana = client.post("/api/analysis", json=payload)
+    assert ana.status_code == 200
+    margin = next(
+        item
+        for item in ana.json()["periods"][0]["indicators"]
+        if item["indicator"] == "net_profit_margin"
+    )
+    rev_evidence = next(item for item in margin["inputs"] if item["field"] == "revenue")
+    assert rev_evidence["figure"]["origin"] == "document"
+    assert rev_evidence["figure"]["source"] == source
+
+    # Detached document reference (document_id=None) also validates cleanly.
+    payload["periods"][0]["values"]["revenue"]["source"] = {
+        **source,
+        "document_id": None,
+    }
+    assert client.post("/api/validate", json=payload).status_code == 200
+
+    # Invalid combinations are rejected with 422.
+    bad_variants = [
+        {"raw": "10", "origin": "document", "source": None},
+        {"raw": "", "origin": "document", "source": source},
+        {"raw": "10", "origin": "manual", "source": source},
+        {"raw": "10", "origin": "other"},
+        {
+            "raw": "10",
+            "origin": "document",
+            "source": {**source, "document_id": "not-a-uuid"},
+        },
+        {"raw": "10", "origin": "document", "source": {**source, "page_number": 0}},
+        {"raw": "10", "origin": "document", "source": {**source, "row_index": 1}},
+        {"raw": "10", "origin": "document", "source": {**source, "column_index": 1}},
+    ]
+    for bad in bad_variants:
+        payload["periods"][0]["values"]["revenue"] = bad
+        assert client.post("/api/validate", json=payload).status_code == 422
