@@ -39,6 +39,7 @@ let pending = deferred();
 let analysisPending = deferred();
 let docPending = deferred();
 let qaPending = deferred();
+let reportPending = deferred();
 const restoration = deferred();
 let logoutFailure: "http" | "network" | null = "http";
 const calls: string[] = [];
@@ -53,6 +54,7 @@ globalThis.fetch = async (input, options) => {
   if (path === "/api/businesses" && options?.method !== "POST") {
     return Response.json(["a", "b"].map(id => ({ id, business_name: `Business ${id}`, input_revision: 1 })));
   }
+  if (path.includes("/reports")) return reportPending.promise;
   if (path.endsWith("/qa")) return qaPending.promise;
   if (path.includes("/documents")) return docPending.promise;
   return path.endsWith("/analysis") ? analysisPending.promise : pending.promise;
@@ -333,7 +335,58 @@ async function run() {
   check(text().includes("Template fallback") && text().includes("Local explanation model unavailable"), "Q&A shows explicit fallback badge and reason");
   check(text().includes("[F2]") && text().includes("9.00%") && text().includes("[D1]") && Boolean(document.querySelector('a[href="/api/businesses/a/documents/doc-1/file#page=3"]')), "Q&A renders verified financial and page-linked document citations");
 
+  // P5-01 printable preparation report & supersession checks
+  const fakeAnalysis = {
+    rule_version: "financial-rules-v1",
+    limitations: ["Provisional rules pending finance review."],
+    action_version: "preparation-actions-v1",
+    actions: [{
+      category: "review", code: "unreviewed", message: "Review submitted figures.",
+      inputs: [{ year_start: 2023, field: "revenue" }],
+      targets: [{ year_start: 2023, indicator: "net_profit_margin" }],
+    }],
+    periods: payload.periods.map(p => ({
+      year_start: p.year_start,
+      balance_check: { state: "Needs review", difference_inr: null, tolerance_inr: "0.015", inputs: [], reasons: [{ code: "unreviewed", message: "Review figures.", fields: ["total_assets"] }] },
+      indicators: ["revenue_growth", "net_profit_margin", "working_capital", "current_ratio", "debt_to_equity", "interest_coverage"].map(ind => ({
+        indicator: ind, state: "Needs review", value: null, inputs: [],
+        reasons: [{ code: "unreviewed", message: "Review figures.", fields: ["revenue"] }],
+        next_step: "Review figures.",
+      })),
+    })),
+  };
+  check(text().includes("Report v1 · Input revision 1") && text().includes("Superseded"), "Report history shows superseded Rev 1 report");
+  reportPending = deferred();
+  await click(button("Open superseded report"));
+  check(calls.includes("GET /api/businesses/a/reports/r1"), "Opening historical version fetches report endpoint");
+  await act(async () => reportPending.resolve(Response.json({
+    report_id: "r1", business_id: "a", report_version: 1, input_revision: 1, current_input_revision: 2,
+    rule_version: "financial-rules-v1", action_version: "preparation-actions-v1",
+    superseded: true, superseded_reason: "Superseded by workspace input revision 2.",
+    created_at: "2026-11-12T10:00:00Z", report_schema_version: "preparation-report-v1",
+    business_name: "Edited after analysis", currency: "INR", basis: "standalone",
+    inputs: { ...payload, business_name: "Edited after analysis" }, analysis: fakeAnalysis,
+    missing_evidence: [{ year_start: 2023, fields: ["revenue"], code: "unreviewed", state: "Needs review", message: "Review figures.", affected_analyses: ["net_profit_margin"] }],
+    documents_referenced: [], limitations: ["Provisional rules pending finance review."],
+  })));
+  check(Boolean(document.querySelector("#preparation-report-sheet")) && text().includes("SUPERSEDED") && text().includes("Superseded by workspace input revision 2."), "Historical report renders SUPERSEDED banner and reason");
+
+  reportPending = deferred();
+  await click(button("Generate preparation report"));
+  check(calls.includes("POST /api/businesses/a/reports"), "Generate preparation report posts to report endpoint");
+  await act(async () => reportPending.resolve(Response.json({
+    report_id: "r2", business_id: "a", report_version: 2, input_revision: 2, current_input_revision: 2,
+    rule_version: "financial-rules-v1", action_version: "preparation-actions-v1",
+    superseded: false, superseded_reason: null,
+    created_at: "2026-11-21T12:00:00Z", report_schema_version: "preparation-report-v1",
+    business_name: "Edited after analysis", currency: "INR", basis: "standalone",
+    inputs: { ...payload, business_name: "Edited after analysis" }, analysis: fakeAnalysis,
+    missing_evidence: [], documents_referenced: [], limitations: ["Provisional rules pending finance review."],
+  })));
+  check(text().includes("CURRENT VERSION") && text().includes("Report v2 · Input revision 2") && Boolean(button("Print / Save as PDF")), "Generated report shows CURRENT VERSION, v2 history, and print control");
+
   await rename("Draft with revision conflict");
+  check(button("Generate preparation report").matches(":disabled"), "Unsaved edits disable generating a new report until saved");
   check(text().includes("Unsaved edits present") && document.querySelector<HTMLInputElement>("#qa-question")!.matches(":disabled"), "Unsaved edits disable Q&A until saved");
   pending = deferred();
   await click(button("Save workspace"));

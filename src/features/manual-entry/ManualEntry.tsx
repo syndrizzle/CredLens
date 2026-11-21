@@ -20,12 +20,14 @@ import {
   type BusinessSummary,
   type DocumentExtractionResponse,
   type DocumentSummary,
+  type PreparationReportResponse,
   type SessionUser,
   type WorkspaceResponse,
 } from "../analysis/api";
 import { useAnalysis } from "../analysis/use-analysis";
 import { SourceReview, type HighlightedCell } from "../documents/SourceReview";
 import { WorkspaceQA } from "../qa/WorkspaceQA";
+import { PreparationReportPanel } from "../reports/PreparationReport";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
@@ -119,6 +121,8 @@ function ManualEntry() {
   } | null>(null);
   const [workspaceBusy, setWorkspaceBusy] = useState(false);
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
+  const [activeReport, setActiveReport] =
+    useState<PreparationReportResponse | null>(null);
   const [documentBusy, setDocumentBusy] = useState(false);
   const [documentError, setDocumentError] = useState<string | null>(null);
   const [selectedPdf, setSelectedPdf] = useState<File | null>(null);
@@ -174,6 +178,7 @@ function ManualEntry() {
         setActiveReview(null);
         setHighlightedCell(null);
         setApplyWarnings([]);
+        setActiveReport(null);
       }
       return {
         id: workspace.business_id,
@@ -237,6 +242,7 @@ function ManualEntry() {
       setBusinesses([]);
       setActiveWorkspace(null);
       setActiveReview(null);
+      setActiveReport(null);
       setHighlightedCell(null);
       setApplyWarnings([]);
       setWorkspaceError(null);
@@ -563,6 +569,7 @@ function ManualEntry() {
     setForm(createEmptyForm());
     setActiveWorkspace(null);
     setActiveReview(null);
+    setActiveReport(null);
     setHighlightedCell(null);
     setApplyWarnings([]);
     setSelectedPdf(null);
@@ -743,6 +750,7 @@ function ManualEntry() {
     setForm(createExampleForm());
     setActiveWorkspace(null);
     setActiveReview(null);
+    setActiveReport(null);
     setHighlightedCell(null);
     setApplyWarnings([]);
     setShowErrors(false);
@@ -840,8 +848,9 @@ function ManualEntry() {
   }
 
   return (
-    <main className="min-h-screen bg-muted/30">
-      <fieldset disabled={actionsDisabled} className="mx-auto flex min-w-0 max-w-5xl flex-col gap-6 px-4 py-8 sm:px-6 lg:py-12" aria-label="Financial health workspace">
+    <main className="min-h-screen bg-muted/30 print:min-h-0 print:bg-white">
+      <fieldset disabled={actionsDisabled} className="mx-auto flex min-w-0 max-w-5xl flex-col gap-6 px-4 py-8 sm:px-6 lg:py-12 print:max-w-none print:p-0" aria-label="Financial health workspace">
+        <div className={activeReport ? "flex flex-col gap-6 print:hidden" : "flex flex-col gap-6"}>
         <header className="flex flex-wrap items-start justify-between gap-4">
           <div className="space-y-1">
             <p className="text-sm font-medium text-primary">CredLens</p>
@@ -1488,25 +1497,71 @@ function ManualEntry() {
             runs={savedClean ? activeWorkspace.runs : undefined}
           />
         ) : null}
+        </div>
 
         {activeWorkspace ? (
-          <WorkspaceQA
-            key={activeWorkspace.id}
+          <PreparationReportPanel
+            key={`report-${activeWorkspace.id}`}
             businessId={activeWorkspace.id}
             businessName={activeWorkspace.form.businessName}
             inputRevision={activeWorkspace.revision}
-            years={sortedPeriods(activeWorkspace.form.periods).map(
-              (period) => period.yearStart,
-            )}
-            hasReadyDocuments={activeWorkspace.documents.some(
-              (doc) => doc.status === "ready",
-            )}
+            runs={activeWorkspace.runs}
             hasUnsavedChanges={!savedClean}
             disabled={workspaceBusy || analysis.loading}
+            activeReport={activeReport}
+            onActiveReportChange={setActiveReport}
+            onReportGenerated={(report) => {
+              setActiveWorkspace((current) => {
+                if (!current || current.id !== report.business_id) return current;
+                const alreadyTracked = current.runs.some(
+                  (run) => run.run_id === report.report_id,
+                );
+                const nextRuns = alreadyTracked
+                  ? current.runs
+                  : [
+                      {
+                        run_id: report.report_id,
+                        input_revision: report.input_revision,
+                        rule_version: report.rule_version,
+                        action_version: report.action_version ?? null,
+                        superseded: false,
+                        created_at: report.created_at,
+                      },
+                      ...current.runs.map((run) => ({
+                        ...run,
+                        superseded: true,
+                      })),
+                    ];
+                return {
+                  ...current,
+                  analysis: report.analysis,
+                  runs: nextRuns,
+                };
+              });
+            }}
           />
         ) : null}
 
-        <footer className="space-y-1 pb-4 text-xs text-muted-foreground">
+        {activeWorkspace ? (
+          <div className={activeReport ? "print:hidden" : undefined}>
+            <WorkspaceQA
+              key={activeWorkspace.id}
+              businessId={activeWorkspace.id}
+              businessName={activeWorkspace.form.businessName}
+              inputRevision={activeWorkspace.revision}
+              years={sortedPeriods(activeWorkspace.form.periods).map(
+                (period) => period.yearStart,
+              )}
+              hasReadyDocuments={activeWorkspace.documents.some(
+                (doc) => doc.status === "ready",
+              )}
+              hasUnsavedChanges={!savedClean}
+              disabled={workspaceBusy || analysis.loading}
+            />
+          </div>
+        ) : null}
+
+        <footer className="space-y-1 pb-4 text-xs text-muted-foreground print:hidden">
           <p>
             Protected workspaces and page-linked source review · Financial rules
             are provisional pending finance-reviewer validation.

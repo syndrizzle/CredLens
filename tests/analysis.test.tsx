@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { AnalysisResults } from "../src/features/analysis/AnalysisResults";
 import { SourceReview } from "../src/features/documents/SourceReview";
 import { WorkspaceQA } from "../src/features/qa/WorkspaceQA";
+import { PreparationReportSheet } from "../src/features/reports/PreparationReport";
 import {
   analysisRequest,
   displayDecimal,
@@ -922,4 +923,113 @@ test("Q&A client validates responses, enforces status errors, and WorkspaceQA re
   expect(qaHtml).toContain("Evidence-grounded Q&amp;A");
   expect(qaHtml).toContain("Unsaved edits present");
   expect(qaHtml).toContain("borrowing notes");
+});
+
+test("report client validates preparation reports and renders Current vs Superseded printable sheets", async () => {
+  const { fetchReport, fetchReports, generateReport } =
+    await import("../src/features/analysis/api");
+  const form = reviewed();
+  const reqPayload = analysisRequest(form);
+  const analysis = engine(form);
+  const bizId = "11111111-1111-1111-1111-111111111111";
+  const repId = "22222222-2222-2222-2222-222222222222";
+  const summary = {
+    report_id: repId,
+    business_id: bizId,
+    report_version: 2,
+    input_revision: 2,
+    current_input_revision: 2,
+    rule_version: "financial-rules-v1",
+    action_version: "preparation-actions-v1",
+    superseded: false,
+    superseded_reason: null,
+    created_at: "2026-11-21T12:00:00Z",
+  };
+  const fullReport = {
+    ...summary,
+    report_schema_version: "preparation-report-v1" as const,
+    business_name: reqPayload.business_name,
+    currency: "INR" as const,
+    basis: "standalone" as const,
+    inputs: reqPayload,
+    analysis,
+    missing_evidence: [
+      {
+        year_start: 2023,
+        fields: ["revenue" as const],
+        code: "missing_prior_year",
+        state: "Not assessed" as const,
+        message: "Supply the immediately preceding financial year starting 2022.",
+        affected_analyses: ["revenue_growth" as const],
+      },
+    ],
+    documents_referenced: [
+      {
+        document_id: "dddddddd-dddd-dddd-dddd-dddddddddddd",
+        filename: "aster-reference.pdf",
+        pages: [1, 2],
+        detached: false,
+      },
+    ],
+    limitations: [
+      ...analysis.limitations,
+      "This preparation report summarizes reviewed inputs and deterministic Python calculations.",
+    ],
+  };
+
+  respond([summary]);
+  const list = await fetchReports(bizId);
+  expect(list).toHaveLength(1);
+  expect(list[0]?.report_version).toBe(2);
+
+  respond(fullReport);
+  const generated = await generateReport(bizId);
+  expect(generated.report_schema_version).toBe("preparation-report-v1");
+  expect(generated.superseded).toBe(false);
+
+  respond(fullReport);
+  const loaded = await fetchReport(bizId, repId);
+  expect(loaded.report_id).toBe(repId);
+
+  for (const [status, match] of [
+    [401, "session expired"],
+    [404, "not found"],
+    [503, "Report service is unavailable"],
+  ] as const) {
+    respond({}, status);
+    await expect(fetchReport(bizId, repId)).rejects.toThrow(match);
+  }
+
+  respond({ ...fullReport, report_schema_version: "wrong-version" });
+  await expect(generateReport(bizId)).rejects.toThrow("invalid report payload");
+
+  const currentHtml = renderToStaticMarkup(
+    <PreparationReportSheet
+      report={fullReport}
+      currentWorkspaceRevision={2}
+      businessId={bizId}
+    />,
+  );
+  expect(currentHtml).toContain("CURRENT VERSION");
+  expect(currentHtml).toContain("preparation-report-v1");
+  expect(currentHtml).toContain("20.00%");
+  expect(currentHtml).toContain("aster-reference.pdf");
+  expect(currentHtml).toContain("Ordered Preparation Actions");
+
+  const supersededHtml = renderToStaticMarkup(
+    <PreparationReportSheet
+      report={{
+        ...fullReport,
+        report_version: 1,
+        input_revision: 1,
+        current_input_revision: 2,
+        superseded: true,
+        superseded_reason: "Superseded by workspace input revision 2.",
+      }}
+      currentWorkspaceRevision={2}
+      businessId={bizId}
+    />,
+  );
+  expect(supersededHtml).toContain("SUPERSEDED");
+  expect(supersededHtml).toContain("Superseded by workspace input revision 2.");
 });

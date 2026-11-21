@@ -187,6 +187,43 @@ export type QAResponse = {
   document_citations: DocumentCitation[];
   limitations: string[];
 };
+export type ReportSummary = {
+  report_id: string;
+  business_id: string;
+  report_version: number;
+  input_revision: number;
+  current_input_revision: number;
+  rule_version: string;
+  action_version?: string | null;
+  superseded: boolean;
+  superseded_reason: string | null;
+  created_at: string;
+};
+export type ReportMissingEvidenceItem = {
+  year_start: number;
+  fields: FinancialFieldKey[];
+  code: string;
+  state: EvidenceState;
+  message: string;
+  affected_analyses: (Indicator | "balance_check")[];
+};
+export type ReportDocumentReference = {
+  document_id: string | null;
+  filename: string;
+  pages: number[];
+  detached: boolean;
+};
+export type PreparationReportResponse = ReportSummary & {
+  report_schema_version: "preparation-report-v1";
+  business_name: string;
+  currency: "INR";
+  basis: "standalone";
+  inputs: RequestPayload;
+  analysis: AnalysisResponse;
+  missing_evidence: ReportMissingEvidenceItem[];
+  documents_referenced: ReportDocumentReference[];
+  limitations: string[];
+};
 
 export function documentFileUrl(businessId: string, documentId: string, pageNumber?: number): string {
   const base = `/api/businesses/${encodeURIComponent(businessId)}/documents/${encodeURIComponent(documentId)}/file`;
@@ -379,6 +416,50 @@ export async function askWorkspaceQuestion(
   if (!response.ok) throw new Error("Q&A service is unavailable. Check that the local backend is running, then retry.");
   const body: unknown = await response.json();
   if (!validQAResponse(body)) throw new Error("The server returned an invalid Q&A payload.");
+  return body;
+}
+
+export async function fetchReports(businessId: string): Promise<ReportSummary[]> {
+  const response = await fetch(`/api/businesses/${encodeURIComponent(businessId)}/reports`, {
+    credentials: "same-origin",
+    signal: AbortSignal.timeout(30000),
+  });
+  if (response.status === 401) throw new Error("Your session expired. Sign in again.");
+  if (response.status === 404) throw new Error("Workspace not found.");
+  if (!response.ok) throw new Error("Could not load report history.");
+  const body: unknown = await response.json();
+  if (!Array.isArray(body) || !body.every(validReportSummary)) {
+    throw new Error("The server returned an invalid report list.");
+  }
+  return body;
+}
+
+export async function generateReport(businessId: string): Promise<PreparationReportResponse> {
+  const response = await fetch(`/api/businesses/${encodeURIComponent(businessId)}/reports`, {
+    method: "POST",
+    credentials: "same-origin",
+    signal: AbortSignal.timeout(30000),
+  });
+  return parseReportResponse(response);
+}
+
+export async function fetchReport(
+  businessId: string,
+  reportId: string,
+): Promise<PreparationReportResponse> {
+  const response = await fetch(
+    `/api/businesses/${encodeURIComponent(businessId)}/reports/${encodeURIComponent(reportId)}`,
+    { credentials: "same-origin", signal: AbortSignal.timeout(30000) },
+  );
+  return parseReportResponse(response);
+}
+
+async function parseReportResponse(response: Response): Promise<PreparationReportResponse> {
+  if (response.status === 401) throw new Error("Your session expired. Sign in again.");
+  if (response.status === 404) throw new Error("Workspace or report not found.");
+  if (!response.ok) throw new Error("Report service is unavailable. Check that the local backend is running, then retry.");
+  const body: unknown = await response.json();
+  if (!validPreparationReport(body)) throw new Error("The server returned an invalid report payload.");
   return body;
 }
 
@@ -578,6 +659,46 @@ function validQAResponse(value: unknown): value is QAResponse {
     Array.isArray(value.financial_citations) && value.financial_citations.every(validFinancialCitation) &&
     Array.isArray(value.document_citations) && value.document_citations.every(validDocumentCitation) &&
     Array.isArray(value.limitations) && value.limitations.every(item => typeof item === "string");
+}
+function validReportSummary(value: unknown): value is ReportSummary {
+  return record(value) &&
+    typeof value.report_id === "string" && value.report_id.length > 0 &&
+    typeof value.business_id === "string" && value.business_id.length > 0 &&
+    Number.isInteger(value.report_version) && Number(value.report_version) > 0 &&
+    Number.isInteger(value.input_revision) && Number(value.input_revision) > 0 &&
+    Number.isInteger(value.current_input_revision) && Number(value.current_input_revision) > 0 &&
+    typeof value.rule_version === "string" && value.rule_version.length > 0 &&
+    (value.action_version === undefined || value.action_version === null || typeof value.action_version === "string") &&
+    typeof value.superseded === "boolean" &&
+    (value.superseded_reason === null || typeof value.superseded_reason === "string") &&
+    typeof value.created_at === "string" && value.created_at.length > 0;
+}
+function validPreparationReport(value: unknown): value is PreparationReportResponse {
+  if (!validReportSummary(value)) return false;
+  const raw = value as Record<string, unknown>;
+  if (
+    raw.report_schema_version !== "preparation-report-v1" ||
+    typeof raw.business_name !== "string" || raw.business_name.trim().length === 0 ||
+    raw.currency !== "INR" || raw.basis !== "standalone" ||
+    !validRequest(raw.inputs) ||
+    !validResponse(raw.analysis, formFromRequest(raw.inputs)) ||
+    !Array.isArray(raw.missing_evidence) ||
+    !Array.isArray(raw.documents_referenced) ||
+    !Array.isArray(raw.limitations) || !raw.limitations.every(item => typeof item === "string")
+  ) return false;
+  const missingOk = raw.missing_evidence.every(item => record(item) &&
+    Number.isInteger(item.year_start) &&
+    Array.isArray(item.fields) && item.fields.every(field) &&
+    typeof item.code === "string" && item.code.length > 0 &&
+    state(item.state) && typeof item.message === "string" && item.message.length > 0 &&
+    Array.isArray(item.affected_analyses) && item.affected_analyses.every(target =>
+      target === "balance_check" || (typeof target === "string" && Object.hasOwn(INDICATORS, target))));
+  const docsOk = raw.documents_referenced.every(item => record(item) &&
+    (item.document_id === null || (typeof item.document_id === "string" && item.document_id.length > 0)) &&
+    typeof item.filename === "string" && item.filename.length > 0 &&
+    Array.isArray(item.pages) && item.pages.every(p => Number.isInteger(p) && Number(p) >= 1 && Number(p) <= 50) &&
+    typeof item.detached === "boolean");
+  return missingOk && docsOk;
 }
 function validWorkspace(value: unknown): value is WorkspaceResponse {
   if (!record(value) || typeof value.business_id !== "string" || !Number.isInteger(value.input_revision) || !validRequest(value.request) || !validRuns(value.runs) || !validDocuments(value.documents)) return false;

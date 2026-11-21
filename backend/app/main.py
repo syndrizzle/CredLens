@@ -38,6 +38,7 @@ from app.persistence import (
     update_business,
 )
 from app.qa import answer_workspace_question, load_qa_context
+from app.reports import generate_report, list_reports, load_report
 from app.retrieval import EmbeddingUnavailableError, retrieve_passages
 from app.schemas import (
     AnalysisRequest,
@@ -47,8 +48,10 @@ from app.schemas import (
     CredentialsRequest,
     DocumentExtractionResponse,
     DocumentSummary,
+    PreparationReportResponse,
     QARequest,
     QAResponse,
+    ReportSummary,
     RetrievalRequest,
     RetrievalResponse,
     SessionResponse,
@@ -445,3 +448,46 @@ def ask_business_question(
         year_start=payload.year_start,
         document_selected=payload.document_id is not None,
     )
+
+
+@app.get(
+    "/api/businesses/{business_id}/reports",
+    response_model=list[ReportSummary],
+)
+def get_business_reports(business_id: UUID, request: Request) -> list[ReportSummary]:
+    with db_transaction() as connection:
+        session = require_session(connection, request)
+        try:
+            return list_reports(connection, session.owner_id, business_id)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from None
+
+
+@app.post(
+    "/api/businesses/{business_id}/reports",
+    response_model=PreparationReportResponse,
+)
+def create_business_report(
+    business_id: UUID, request: Request
+) -> PreparationReportResponse:
+    with db_transaction() as connection:
+        session = require_session(connection, request)
+        try:
+            return generate_report(connection, session.owner_id, business_id)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from None
+
+
+@app.get(
+    "/api/businesses/{business_id}/reports/{report_id}",
+    response_model=PreparationReportResponse,
+)
+def get_business_report(
+    business_id: UUID, report_id: UUID, request: Request
+) -> PreparationReportResponse:
+    with db_transaction() as connection:
+        session = require_session(connection, request)
+        try:
+            return load_report(connection, session.owner_id, business_id, report_id)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from None
