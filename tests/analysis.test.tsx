@@ -1033,3 +1033,59 @@ test("report client validates preparation reports and renders Current vs Superse
   expect(supersededHtml).toContain("SUPERSEDED");
   expect(supersededHtml).toContain("Superseded by workspace input revision 2.");
 });
+
+test("workspace deletion and audit log clients validate payloads and surface errors", async () => {
+  const { deleteWorkspace, fetchAuditEvents } =
+    await import("../src/features/analysis/api");
+  const bizId = "11111111-1111-1111-1111-111111111111";
+  const ownerId = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+
+  respond({
+    status: "deleted",
+    business_id: bizId,
+    documents_removed: 2,
+    runs_removed: 3,
+    revisions_removed: 2,
+    chat_note: "Q&A turns are request-scoped.",
+    backup_notice: "Host backups follow retention policies and are not immediately purged.",
+  });
+  const deleted = await deleteWorkspace(bizId);
+  expect(deleted.status).toBe("deleted");
+  expect(deleted.documents_removed).toBe(2);
+  expect(deleted.backup_notice).toContain("not immediately purged");
+
+  for (const [status, match] of [
+    [401, "session expired"],
+    [404, "Workspace not found"],
+    [409, "Another PDF processing job is active"],
+    [503, "Could not delete workspace"],
+  ] as const) {
+    respond({}, status);
+    await expect(deleteWorkspace(bizId)).rejects.toThrow(match);
+  }
+
+  respond({ status: "deleted", business_id: bizId });
+  await expect(deleteWorkspace(bizId)).rejects.toThrow("invalid deletion confirmation");
+
+  respond([
+    {
+      id: "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee",
+      owner_id: ownerId,
+      action: "workspace_deleted",
+      resource_type: "workspace",
+      resource_id: bizId,
+      business_id: bizId,
+      details: { documents_removed: 2, runs_removed: 3 },
+      created_at: "2026-11-21T15:00:00Z",
+    },
+  ]);
+  const events = await fetchAuditEvents(bizId);
+  expect(events).toHaveLength(1);
+  expect(events[0]?.action).toBe("workspace_deleted");
+
+  respond({}, 401);
+  await expect(fetchAuditEvents()).rejects.toThrow("session expired");
+
+  respond([{ id: "", action: "workspace_deleted" }]);
+  await expect(fetchAuditEvents()).rejects.toThrow("invalid activity log payload");
+});

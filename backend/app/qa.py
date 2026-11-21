@@ -15,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.engine import Connection
 
 from app.analysis import analyse
+from app.audit import record_audit_event
 from app.models import documents
 from app.persistence import load_workspace
 from app.retrieval import EmbeddingUnavailableError, retrieve_passages
@@ -338,6 +339,18 @@ def load_qa_context(
         workspace.latest_analysis
         if workspace.latest_analysis is not None
         else analyse(workspace.request)
+    )
+    record_audit_event(
+        connection,
+        owner_id,
+        "qa_asked",
+        "qa",
+        resource_id=business_id,
+        business_id=business_id,
+        details={
+            "input_revision": workspace.input_revision,
+            "retrieval_status": retrieval_status,
+        },
     )
     return QAContext(
         workspace=workspace,

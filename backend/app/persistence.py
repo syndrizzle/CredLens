@@ -7,6 +7,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Connection
 
 from app.analysis import MULTIPLIERS, analyse
+from app.audit import record_audit_event
 from app.documents import list_documents
 from app.models import analysis_runs, businesses, documents, figures, periods, revisions
 from app.schemas import (
@@ -295,6 +296,15 @@ def save_business(
             inputs=saved.model_dump(mode="json"),
         )
     )
+    record_audit_event(
+        connection,
+        owner_id,
+        "workspace_created",
+        "workspace",
+        resource_id=business_id,
+        business_id=business_id,
+        details={"input_revision": 1},
+    )
     return business_id
 
 
@@ -372,6 +382,15 @@ def update_business(
             inputs=saved.model_dump(mode="json"),
         )
     )
+    record_audit_event(
+        connection,
+        owner_id,
+        "workspace_updated",
+        "workspace",
+        resource_id=business_id,
+        business_id=business_id,
+        details={"input_revision": next_revision},
+    )
     return next_revision
 
 
@@ -401,6 +420,15 @@ def save_analysis(connection: Connection, owner_id: UUID, business_id: UUID) -> 
             inputs=request.model_dump(mode="json"),
             results=result.model_dump(mode="json"),
         )
+    )
+    record_audit_event(
+        connection,
+        owner_id,
+        "analysis_run_created",
+        "analysis_run",
+        resource_id=run_id,
+        business_id=business_id,
+        details={"input_revision": input_revision},
     )
     return run_id
 

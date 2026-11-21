@@ -696,3 +696,46 @@ class PreparationReportResponse(ReportSummary):
     missing_evidence: list[ReportMissingEvidenceItem] = Field(default_factory=list)
     documents_referenced: list[ReportDocumentReference] = Field(default_factory=list)
     limitations: list[str] = Field(default_factory=list)
+
+
+class WorkspaceDeleteResponse(Model):
+    status: Literal["deleted"] = "deleted"
+    business_id: UUID
+    documents_removed: int = Field(ge=0)
+    runs_removed: int = Field(ge=0)
+    revisions_removed: int = Field(ge=0)
+    chat_note: str
+    backup_notice: str
+
+
+class AuditEventSummary(Model):
+    id: UUID
+    owner_id: UUID
+    action: Literal[
+        "account_registered",
+        "session_login",
+        "session_logout",
+        "workspace_created",
+        "workspace_updated",
+        "workspace_deleted",
+        "analysis_run_created",
+        "document_uploaded",
+        "document_retried",
+        "document_extracted",
+        "document_deleted",
+        "report_generated",
+        "qa_asked",
+    ]
+    resource_type: Literal[
+        "account",
+        "session",
+        "workspace",
+        "analysis_run",
+        "document",
+        "report",
+        "qa",
+    ]
+    resource_id: UUID | None = None
+    business_id: UUID | None = None
+    details: dict[str, str | int | bool | None] | None = None
+    created_at: datetime

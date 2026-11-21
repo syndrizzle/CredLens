@@ -280,3 +280,34 @@ Index(
     document_chunks.c.owner_id,
     document_chunks.c.business_id,
 )
+audit_events = Table(
+    "audit_events",
+    metadata,
+    Column("id", Uuid, primary_key=True),
+    Column(
+        "owner_id",
+        Uuid,
+        ForeignKey("owners.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    ),
+    Column("action", String(64), nullable=False),
+    Column("resource_type", String(32), nullable=False),
+    Column("resource_id", Uuid, nullable=True),
+    Column("business_id", Uuid, nullable=True, index=True),
+    Column("details", JSONB(none_as_null=True), nullable=True),
+    created_at(),
+    CheckConstraint(
+        "action IN ('account_registered','session_login','session_logout','workspace_created','workspace_updated','workspace_deleted','analysis_run_created','document_uploaded','document_retried','document_extracted','document_deleted','report_generated','qa_asked')",
+        name="audit_action",
+    ),
+    CheckConstraint(
+        "resource_type IN ('account','session','workspace','analysis_run','document','report','qa')",
+        name="audit_resource_type",
+    ),
+)
+Index(
+    "ix_audit_events_owner_created",
+    audit_events.c.owner_id,
+    audit_events.c.created_at,
+)

@@ -7,6 +7,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.engine import Connection
 
+from app.audit import record_audit_event
 from app.models import analysis_runs
 from app.persistence import owned_business, save_analysis
 from app.schemas import (
@@ -333,4 +334,17 @@ def generate_report(
         if existing_run_id is not None
         else save_analysis(connection, owner_id, business_id)
     )
-    return load_report(connection, owner_id, business_id, run_id)
+    report = load_report(connection, owner_id, business_id, run_id)
+    record_audit_event(
+        connection,
+        owner_id,
+        "report_generated",
+        "report",
+        resource_id=report.report_id,
+        business_id=business_id,
+        details={
+            "input_revision": report.input_revision,
+            "report_version": report.report_version,
+        },
+    )
+    return report

@@ -2,12 +2,13 @@ from contextlib import contextmanager
 from urllib.parse import quote
 from uuid import UUID
 
-from fastapi import FastAPI, File, HTTPException, Request, Response, UploadFile
+from fastapi import FastAPI, File, HTTPException, Query, Request, Response, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.analysis import analyse
+from app.audit import list_audit_events
 from app.auth import (
     SESSION_COOKIE,
     SESSION_MAX_AGE,
@@ -21,6 +22,7 @@ from app.document_ingress import DocumentUploadGuard
 from app.documents import (
     DocumentRejectError,
     delete_document,
+    delete_workspace,
     extract_ready_document,
     get_document_extraction,
     get_document_file,
@@ -44,6 +46,7 @@ from app.schemas import (
     AnalysisRequest,
     AnalysisResponse,
     AnalysisRunResponse,
+    AuditEventSummary,
     BusinessSummary,
     CredentialsRequest,
     DocumentExtractionResponse,
@@ -56,6 +59,7 @@ from app.schemas import (
     RetrievalResponse,
     SessionResponse,
     UpdateBusinessRequest,
+    WorkspaceDeleteResponse,
     WorkspaceResponse,
 )
 
@@ -491,3 +495,30 @@ def get_business_report(
             return load_report(connection, session.owner_id, business_id, report_id)
         except LookupError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from None
+
+
+@app.delete(
+    "/api/businesses/{business_id}",
+    response_model=WorkspaceDeleteResponse,
+)
+def remove_business(business_id: UUID, request: Request) -> WorkspaceDeleteResponse:
+    with db_transaction() as connection:
+        session = require_session(connection, request)
+    with document_errors():
+        return delete_workspace(get_engine(), session.owner_id, business_id)
+
+
+@app.get(
+    "/api/audit-events",
+    response_model=list[AuditEventSummary],
+)
+def get_audit_events(
+    request: Request,
+    business_id: UUID | None = None,
+    limit: int = Query(default=50, ge=1, le=100),
+) -> list[AuditEventSummary]:
+    with db_transaction() as connection:
+        session = require_session(connection, request)
+        return list_audit_events(
+            connection, session.owner_id, business_id=business_id, limit=limit
+        )

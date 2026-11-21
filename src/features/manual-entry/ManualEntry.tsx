@@ -2,7 +2,9 @@ import { AnalysisResults } from "../analysis/AnalysisResults";
 import {
   analyseWorkspace,
   deleteDocument,
+  deleteWorkspace,
   documentFileUrl,
+  fetchAuditEvents,
   fetchDocumentExtraction,
   fetchDocuments,
   fetchBusinesses,
@@ -17,6 +19,7 @@ import {
   uploadDocument,
   type AnalysisResponse,
   type AnalysisRunSummary,
+  type AuditEventSummary,
   type BusinessSummary,
   type DocumentExtractionResponse,
   type DocumentSummary,
@@ -123,6 +126,11 @@ function ManualEntry() {
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
   const [activeReport, setActiveReport] =
     useState<PreparationReportResponse | null>(null);
+  const [confirmDeleteWorkspace, setConfirmDeleteWorkspace] = useState(false);
+  const [auditOpen, setAuditOpen] = useState(false);
+  const [auditLoading, setAuditLoading] = useState(false);
+  const [auditError, setAuditError] = useState<string | null>(null);
+  const [auditEvents, setAuditEvents] = useState<AuditEventSummary[]>([]);
   const [documentBusy, setDocumentBusy] = useState(false);
   const [documentError, setDocumentError] = useState<string | null>(null);
   const [selectedPdf, setSelectedPdf] = useState<File | null>(null);
@@ -179,6 +187,7 @@ function ManualEntry() {
         setHighlightedCell(null);
         setApplyWarnings([]);
         setActiveReport(null);
+        setConfirmDeleteWorkspace(false);
       }
       return {
         id: workspace.business_id,
@@ -243,6 +252,10 @@ function ManualEntry() {
       setActiveWorkspace(null);
       setActiveReview(null);
       setActiveReport(null);
+      setConfirmDeleteWorkspace(false);
+      setAuditOpen(false);
+      setAuditEvents([]);
+      setAuditError(null);
       setHighlightedCell(null);
       setApplyWarnings([]);
       setWorkspaceError(null);
@@ -258,6 +271,66 @@ function ManualEntry() {
     } finally {
       actionPending.current = false;
       setAuthBusy(false);
+    }
+  }
+
+  async function handleDeleteWorkspace() {
+    if (!activeWorkspace || actionPending.current) return;
+    actionPending.current = true;
+    setWorkspaceBusy(true);
+    setWorkspaceError(null);
+    setDocumentError(null);
+    const targetId = activeWorkspace.id;
+    const targetName = activeWorkspace.form.businessName;
+    try {
+      const deleted = await deleteWorkspace(targetId);
+      setBusinesses((current) => current.filter((item) => item.id !== targetId));
+      setActiveWorkspace(null);
+      setActiveReview(null);
+      setActiveReport(null);
+      setHighlightedCell(null);
+      setApplyWarnings([]);
+      setConfirmDeleteWorkspace(false);
+      setSelectedPdf(null);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      setForm(createEmptyForm());
+      setReplacement(null);
+      setNotice(
+        `Deleted workspace "${targetName}" (${deleted.documents_removed} PDFs, ${deleted.runs_removed} analysis runs/reports, ${deleted.revisions_removed} revisions removed). ${deleted.backup_notice}`,
+      );
+      if (auditOpen) {
+        try {
+          setAuditEvents(await fetchAuditEvents());
+        } catch {
+          // Keep deletion success even if activity log refresh fails.
+        }
+      }
+    } catch (error) {
+      setWorkspaceError(
+        error instanceof Error ? error.message : "Could not delete workspace.",
+      );
+    } finally {
+      actionPending.current = false;
+      setWorkspaceBusy(false);
+    }
+  }
+
+  async function handleToggleAuditLog() {
+    if (auditOpen) {
+      setAuditOpen(false);
+      return;
+    }
+    setAuditOpen(true);
+    setAuditLoading(true);
+    setAuditError(null);
+    try {
+      setAuditEvents(await fetchAuditEvents());
+    } catch (error) {
+      setAuditError(
+        error instanceof Error ? error.message : "Could not load activity log.",
+      );
+    } finally {
+      setAuditLoading(false);
     }
   }
 
@@ -570,6 +643,7 @@ function ManualEntry() {
     setActiveWorkspace(null);
     setActiveReview(null);
     setActiveReport(null);
+    setConfirmDeleteWorkspace(false);
     setHighlightedCell(null);
     setApplyWarnings([]);
     setSelectedPdf(null);
@@ -751,6 +825,7 @@ function ManualEntry() {
     setActiveWorkspace(null);
     setActiveReview(null);
     setActiveReport(null);
+    setConfirmDeleteWorkspace(false);
     setHighlightedCell(null);
     setApplyWarnings([]);
     setShowErrors(false);
@@ -953,7 +1028,130 @@ function ManualEntry() {
                   >
                     New workspace
                   </Button>
+                  {activeWorkspace ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => {
+                        setConfirmDeleteWorkspace(true);
+                        setReplacement(null);
+                      }}
+                      disabled={workspaceBusy || documentBusy}
+                    >
+                      Delete workspace
+                    </Button>
+                  ) : null}
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => void handleToggleAuditLog()}
+                    disabled={workspaceBusy || auditLoading}
+                  >
+                    {auditOpen ? "Hide activity log" : "Activity log"}
+                  </Button>
                 </div>
+                {confirmDeleteWorkspace && activeWorkspace ? (
+                  <div
+                    role="group"
+                    aria-label="Delete workspace permanently?"
+                    className="space-y-2 rounded-lg border border-destructive/40 bg-muted/50 p-3 text-sm"
+                  >
+                    <p className="font-medium text-destructive">
+                      Delete &ldquo;{activeWorkspace.form.businessName}&rdquo; and all active data?
+                    </p>
+                    <p className="text-muted-foreground">
+                      This immediately removes saved figures, revision history, uploaded PDFs, extraction snapshots, retrieval chunks/embeddings, analysis runs, preparation reports, and in-session Q&amp;A answers.
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      Backup limitation: external PostgreSQL host backups or point-in-time recovery snapshots follow database-host retention policies and are not immediately purged.
+                    </p>
+                    <div className="flex flex-wrap gap-2 pt-1">
+                      <Button
+                        type="button"
+                        variant="destructive"
+                        size="sm"
+                        disabled={workspaceBusy}
+                        onClick={() => void handleDeleteWorkspace()}
+                      >
+                        Delete workspace permanently
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={workspaceBusy}
+                        onClick={() => setConfirmDeleteWorkspace(false)}
+                      >
+                        Cancel
+                      </Button>
+                    </div>
+                  </div>
+                ) : null}
+                {auditOpen ? (
+                  <div className="space-y-2 rounded-lg border border-border p-3 text-xs">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="font-medium text-foreground">
+                        Recent activity (minimal audit log · actor, action, time · no financial payloads)
+                      </p>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="xs"
+                        disabled={auditLoading}
+                        onClick={async () => {
+                          setAuditLoading(true);
+                          setAuditError(null);
+                          try {
+                            setAuditEvents(await fetchAuditEvents());
+                          } catch (error) {
+                            setAuditError(
+                              error instanceof Error
+                                ? error.message
+                                : "Could not load activity log.",
+                            );
+                          } finally {
+                            setAuditLoading(false);
+                          }
+                        }}
+                      >
+                        {auditLoading ? "Loading…" : "Refresh log"}
+                      </Button>
+                    </div>
+                    {auditError ? (
+                      <p role="alert" className="text-destructive">
+                        {auditError}
+                      </p>
+                    ) : auditEvents.length === 0 ? (
+                      <p className="text-muted-foreground">
+                        {auditLoading
+                          ? "Loading activity log…"
+                          : "No activity recorded yet."}
+                      </p>
+                    ) : (
+                      <ul className="space-y-1.5">
+                        {auditEvents.slice(0, 15).map((event) => (
+                          <li
+                            key={event.id}
+                            className="flex flex-wrap items-center justify-between gap-2 border-t border-border/50 pt-1.5"
+                          >
+                            <span className="font-mono text-foreground">
+                              {event.action} · {event.resource_type}
+                              {event.details
+                                ? ` (${Object.entries(event.details)
+                                    .map(([k, v]) => `${k}=${String(v)}`)
+                                    .join(", ")})`
+                                : ""}
+                            </span>
+                            <span className="text-muted-foreground">
+                              {event.created_at}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                ) : null}
                 {replacement ? (
                   <div role="group" aria-label="Discard unsaved entries?" className="rounded-lg border border-border bg-muted/50 p-3">
                     <p className="text-sm font-medium">Discard unsaved entries?</p>

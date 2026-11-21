@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import IntegrityError
 
+from app.audit import record_audit_event
 from app.models import accounts, owners, sessions
 from app.schemas import SessionResponse
 
@@ -83,9 +84,11 @@ def register_account(
         )
     except IntegrityError:
         raise ValueError("Account already exists") from None
-    return SessionResponse(owner_id=owner_id, email=normalized), _create_session(
-        connection, owner_id
+    token = _create_session(connection, owner_id)
+    record_audit_event(
+        connection, owner_id, "account_registered", "account", resource_id=owner_id
     )
+    return SessionResponse(owner_id=owner_id, email=normalized), token
 
 
 def authenticate_account(
@@ -102,9 +105,15 @@ def authenticate_account(
         raise PermissionError("Invalid email or password")
     if not verify_password(password, row["password_hash"]):
         raise PermissionError("Invalid email or password")
-    return SessionResponse(
-        owner_id=row["owner_id"], email=row["email"]
-    ), _create_session(connection, row["owner_id"])
+    token = _create_session(connection, row["owner_id"])
+    record_audit_event(
+        connection,
+        row["owner_id"],
+        "session_login",
+        "session",
+        resource_id=row["owner_id"],
+    )
+    return SessionResponse(owner_id=row["owner_id"], email=row["email"]), token
 
 
 def resolve_session(connection: Connection, token: str | None) -> SessionResponse:
@@ -129,6 +138,16 @@ def resolve_session(connection: Connection, token: str | None) -> SessionRespons
 
 def revoke_session(connection: Connection, token: str | None) -> None:
     if token:
-        connection.execute(
-            sessions.delete().where(sessions.c.token_hash == _token_hash(token))
-        )
+        owner_id = connection.execute(
+            sessions.delete()
+            .where(sessions.c.token_hash == _token_hash(token))
+            .returning(sessions.c.owner_id)
+        ).scalar_one_or_none()
+        if owner_id is not None:
+            record_audit_event(
+                connection,
+                owner_id,
+                "session_logout",
+                "session",
+                resource_id=owner_id,
+            )

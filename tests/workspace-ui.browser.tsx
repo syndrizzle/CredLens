@@ -40,6 +40,7 @@ let analysisPending = deferred();
 let docPending = deferred();
 let qaPending = deferred();
 let reportPending = deferred();
+let auditPending = deferred();
 const restoration = deferred();
 let logoutFailure: "http" | "network" | null = "http";
 const calls: string[] = [];
@@ -54,6 +55,7 @@ globalThis.fetch = async (input, options) => {
   if (path === "/api/businesses" && options?.method !== "POST") {
     return Response.json(["a", "b"].map(id => ({ id, business_name: `Business ${id}`, input_revision: 1 })));
   }
+  if (path.startsWith("/api/audit-events")) return auditPending.promise;
   if (path.includes("/reports")) return reportPending.promise;
   if (path.endsWith("/qa")) return qaPending.promise;
   if (path.includes("/documents")) return docPending.promise;
@@ -414,6 +416,41 @@ async function run() {
   await click(button("Discard and continue"));
   await act(async () => pending.resolve(Response.json({}, { status: 503 })));
   check(name().value === "Keep on failed logout" && !name().matches(":disabled"), "Failed load keeps draft and unlocks editor");
+
+  // P5-02 activity log & workspace deletion with backup disclosure checks
+  auditPending = deferred();
+  await click(button("Activity log"));
+  check(calls.some(call => call.startsWith("GET /api/audit-events")), "Activity log fetches owner audit events");
+  await act(async () => auditPending.resolve(Response.json([{
+    id: "ev-1", owner_id: "owner", action: "report_generated", resource_type: "report",
+    resource_id: "r2", business_id: "a", details: { report_version: 2 }, created_at: "2026-11-21T15:00:00Z",
+  }])));
+  check(text().includes("report_generated") && text().includes("no financial payloads"), "Activity log renders minimal audit events");
+
+  await click(button("Delete workspace"));
+  check(text().includes("Backup limitation") && text().includes("not immediately purged"), "Delete workspace confirmation discloses backup retention limits");
+  await click(button("Cancel"));
+  check(!text().includes("Delete workspace permanently"), "Cancelling delete keeps workspace intact");
+
+  await click(button("Delete workspace"));
+  pending = deferred();
+  auditPending = deferred();
+  await click(button("Delete workspace permanently"));
+  check(calls.includes("DELETE /api/businesses/a"), "Confirmed workspace deletion sends DELETE /api/businesses/{id}");
+  await act(async () => {
+    pending.resolve(Response.json({
+      status: "deleted", business_id: "a", documents_removed: 1, runs_removed: 2, revisions_removed: 2,
+      chat_note: "Q&A turns are request-scoped.",
+      backup_notice: "Active workspace data deleted; external backups are not immediately purged.",
+    }));
+    auditPending.resolve(Response.json([{
+      id: "ev-2", owner_id: "owner", action: "workspace_deleted", resource_type: "workspace",
+      resource_id: "a", business_id: "a", details: { documents_removed: 1 }, created_at: "2026-11-21T15:05:00Z",
+    }]));
+  });
+  check(name().value === "" && text().includes("not immediately purged") && text().includes("workspace_deleted"), "Workspace deletion clears form, discloses backup limits, and logs workspace_deleted");
+
+  await rename("Temporary draft");
   await click(button("New workspace"));
   await click(button("Discard and continue"));
   check(name().value === "", "Confirmed new workspace clears draft");

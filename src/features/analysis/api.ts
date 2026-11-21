@@ -224,6 +224,25 @@ export type PreparationReportResponse = ReportSummary & {
   documents_referenced: ReportDocumentReference[];
   limitations: string[];
 };
+export type WorkspaceDeleteResponse = {
+  status: "deleted";
+  business_id: string;
+  documents_removed: number;
+  runs_removed: number;
+  revisions_removed: number;
+  chat_note: string;
+  backup_notice: string;
+};
+export type AuditEventSummary = {
+  id: string;
+  owner_id: string;
+  action: string;
+  resource_type: string;
+  resource_id: string | null;
+  business_id: string | null;
+  details: Record<string, string | number | boolean | null> | null;
+  created_at: string;
+};
 
 export function documentFileUrl(businessId: string, documentId: string, pageNumber?: number): string {
   const base = `/api/businesses/${encodeURIComponent(businessId)}/documents/${encodeURIComponent(documentId)}/file`;
@@ -463,6 +482,47 @@ async function parseReportResponse(response: Response): Promise<PreparationRepor
   return body;
 }
 
+export async function deleteWorkspace(businessId: string): Promise<WorkspaceDeleteResponse> {
+  const response = await fetch(`/api/businesses/${encodeURIComponent(businessId)}`, {
+    method: "DELETE",
+    credentials: "same-origin",
+    signal: AbortSignal.timeout(30000),
+  });
+  if (response.status === 401) throw new Error("Your session expired. Sign in again.");
+  if (response.status === 404) throw new Error("Workspace not found.");
+  if (response.status === 409) {
+    throw new Error("Another PDF processing job is active; wait for it to finish before deleting this workspace.");
+  }
+  if (!response.ok) {
+    const msg = await extractDocumentError(response);
+    throw new Error(msg ?? "Could not delete workspace. Retry to finish removal.");
+  }
+  const body: unknown = await response.json();
+  if (!validWorkspaceDeleteResponse(body)) {
+    throw new Error("The server returned an invalid deletion confirmation.");
+  }
+  return body;
+}
+
+export async function fetchAuditEvents(
+  businessId?: string,
+  limit = 50,
+): Promise<AuditEventSummary[]> {
+  const query = new URLSearchParams({ limit: String(limit) });
+  if (businessId) query.set("business_id", businessId);
+  const response = await fetch(`/api/audit-events?${query.toString()}`, {
+    credentials: "same-origin",
+    signal: AbortSignal.timeout(30000),
+  });
+  if (response.status === 401) throw new Error("Your session expired. Sign in again.");
+  if (!response.ok) throw new Error("Could not load activity log.");
+  const body: unknown = await response.json();
+  if (!Array.isArray(body) || !body.every(validAuditEvent)) {
+    throw new Error("The server returned an invalid activity log payload.");
+  }
+  return body;
+}
+
 async function extractDocumentError(response: Response): Promise<string | null> {
   try {
     const body: unknown = await response.json();
@@ -699,6 +759,32 @@ function validPreparationReport(value: unknown): value is PreparationReportRespo
     Array.isArray(item.pages) && item.pages.every(p => Number.isInteger(p) && Number(p) >= 1 && Number(p) <= 50) &&
     typeof item.detached === "boolean");
   return missingOk && docsOk;
+}
+function validWorkspaceDeleteResponse(value: unknown): value is WorkspaceDeleteResponse {
+  return record(value) &&
+    value.status === "deleted" &&
+    typeof value.business_id === "string" && value.business_id.length > 0 &&
+    Number.isInteger(value.documents_removed) && Number(value.documents_removed) >= 0 &&
+    Number.isInteger(value.runs_removed) && Number(value.runs_removed) >= 0 &&
+    Number.isInteger(value.revisions_removed) && Number(value.revisions_removed) >= 0 &&
+    typeof value.chat_note === "string" && value.chat_note.length > 0 &&
+    typeof value.backup_notice === "string" && value.backup_notice.length > 0;
+}
+function validAuditEvent(value: unknown): value is AuditEventSummary {
+  if (!record(value)) return false;
+  if (
+    typeof value.id !== "string" || value.id.length === 0 ||
+    typeof value.owner_id !== "string" || value.owner_id.length === 0 ||
+    typeof value.action !== "string" || value.action.length === 0 ||
+    typeof value.resource_type !== "string" || value.resource_type.length === 0 ||
+    !(value.resource_id === null || typeof value.resource_id === "string") ||
+    !(value.business_id === null || typeof value.business_id === "string") ||
+    typeof value.created_at !== "string" || value.created_at.length === 0
+  ) return false;
+  if (value.details === null || value.details === undefined) return true;
+  return record(value.details) && Object.values(value.details).every(
+    item => item === null || typeof item === "string" || typeof item === "number" || typeof item === "boolean",
+  );
 }
 function validWorkspace(value: unknown): value is WorkspaceResponse {
   if (!record(value) || typeof value.business_id !== "string" || !Number.isInteger(value.input_revision) || !validRequest(value.request) || !validRuns(value.runs) || !validDocuments(value.documents)) return false;

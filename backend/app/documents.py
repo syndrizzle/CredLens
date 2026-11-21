@@ -14,7 +14,8 @@ from uuid import UUID, uuid4
 from sqlalchemy import func, select
 from sqlalchemy.engine import Connection, Engine
 
-from app.models import businesses, documents
+from app.audit import record_audit_event
+from app.models import analysis_runs, businesses, documents, revisions
 from app.pdf_limits import (
     MAX_PDF_BYTES,
     MAX_PDF_PAGES,
@@ -32,6 +33,7 @@ from app.schemas import (
     DocumentExtractionResponse,
     DocumentExtractionSnapshot,
     DocumentSummary,
+    WorkspaceDeleteResponse,
 )
 
 SUMMARY_COLUMNS = tuple(documents.c[key] for key in DocumentSummary.model_fields)
@@ -412,7 +414,11 @@ def _remove_file_and_empty_dirs(target: Path) -> None:
 
 
 def _finish_processing(
-    engine: Engine, document_id: UUID, path: Path
+    engine: Engine,
+    document_id: UUID,
+    path: Path,
+    *,
+    audit_action: str | None = None,
 ) -> DocumentSummary:
     snapshot: DocumentExtractionSnapshot | None = None
     try:
@@ -500,6 +506,16 @@ def _finish_processing(
             document_id,
             embedded_chunks if values["status"] == "ready" and embedded_chunks else [],
         )
+        if audit_action is not None:
+            record_audit_event(
+                connection,
+                row["owner_id"],
+                audit_action,
+                "document",
+                resource_id=document_id,
+                business_id=row["business_id"],
+                details={"status": values["status"]},
+            )
         summary = _row_to_summary(row)
     return summary
 
@@ -550,8 +566,19 @@ def upload_and_process_document(
                     .one()
                 )
                 summary = _row_to_summary(row)
+                record_audit_event(
+                    connection,
+                    owner_id,
+                    "document_uploaded",
+                    "document",
+                    resource_id=document_id,
+                    business_id=business_id,
+                    details={"status": "failed"},
+                )
             return summary
-        return _finish_processing(engine, document_id, path)
+        return _finish_processing(
+            engine, document_id, path, audit_action="document_uploaded"
+        )
 
 
 def retry_document_processing(
@@ -579,7 +606,10 @@ def retry_document_processing(
                 )
             )
         return _finish_processing(
-            engine, document_id, document_file_path(owner_id, business_id, document_id)
+            engine,
+            document_id,
+            document_file_path(owner_id, business_id, document_id),
+            audit_action="document_retried",
         )
 
 
@@ -619,7 +649,10 @@ def extract_ready_document(
                 )
             )
         _finish_processing(
-            engine, document_id, document_file_path(owner_id, business_id, document_id)
+            engine,
+            document_id,
+            document_file_path(owner_id, business_id, document_id),
+            audit_action="document_extracted",
         )
         with engine.begin() as connection:
             row = _owned_document(
@@ -667,3 +700,112 @@ def delete_document(
             ) from None
         with engine.begin() as connection:
             connection.execute(documents.delete().where(documents.c.id == document_id))
+            record_audit_event(
+                connection,
+                owner_id,
+                "document_deleted",
+                "document",
+                resource_id=document_id,
+                business_id=business_id,
+            )
+
+
+WORKSPACE_CHAT_NOTE = (
+    "Q&A turns are request-scoped and are not persisted in the database; "
+    "any in-session answers clear immediately."
+)
+WORKSPACE_BACKUP_NOTICE = (
+    "Active workspace figures, revisions, uploaded PDFs, extracted snapshots, "
+    "chunks/embeddings, analysis runs, and reports have been deleted. External "
+    "PostgreSQL host backups or point-in-time recovery snapshots follow host "
+    "retention policies and are not immediately purged."
+)
+
+
+def delete_workspace(
+    engine: Engine, owner_id: UUID, business_id: UUID
+) -> WorkspaceDeleteResponse:
+    """Staged deletion of an owned workspace, all local PDFs/temp files, and cascaded DB data."""
+    with _document_job(engine, owner_id, business_id):
+        with engine.begin() as connection:
+            _ensure_owned_business(connection, owner_id, business_id)
+            doc_ids = list(
+                connection.execute(
+                    select(documents.c.id).where(
+                        documents.c.business_id == business_id,
+                        documents.c.owner_id == owner_id,
+                    )
+                ).scalars()
+            )
+            runs_count = connection.execute(
+                select(func.count())
+                .select_from(analysis_runs)
+                .where(analysis_runs.c.business_id == business_id)
+            ).scalar_one()
+            revisions_count = connection.execute(
+                select(func.count())
+                .select_from(revisions)
+                .where(revisions.c.business_id == business_id)
+            ).scalar_one()
+            if doc_ids:
+                connection.execute(
+                    documents.update()
+                    .where(
+                        documents.c.business_id == business_id,
+                        documents.c.owner_id == owner_id,
+                    )
+                    .values(
+                        status="failed",
+                        error_code="deletion_pending",
+                        error_message="Workspace removal is pending. Retry Delete workspace to finish.",
+                        updated_at=func.now(),
+                    )
+                )
+        # Unlink files only after deletion_pending intent has committed.
+        try:
+            for doc_id in doc_ids:
+                _remove_file_and_empty_dirs(
+                    document_file_path(owner_id, business_id, doc_id)
+                )
+            biz_dir = storage_root() / str(owner_id) / str(business_id)
+            if biz_dir.is_dir():
+                for child in biz_dir.iterdir():
+                    if child.is_file() or child.is_symlink():
+                        child.unlink(missing_ok=True)
+                _remove_file_and_empty_dirs(biz_dir / "_cleanup")
+        except OSError:
+            raise DocumentRejectError(
+                503,
+                "deletion_pending",
+                "Workspace removal is pending. Retry Delete workspace to finish.",
+            ) from None
+
+        with engine.begin() as connection:
+            deleted_id = connection.execute(
+                businesses.delete()
+                .where(businesses.c.id == business_id, businesses.c.owner_id == owner_id)
+                .returning(businesses.c.id)
+            ).scalar_one_or_none()
+            if deleted_id is None:
+                raise LookupError("Business not found")
+            record_audit_event(
+                connection,
+                owner_id,
+                "workspace_deleted",
+                "workspace",
+                resource_id=business_id,
+                business_id=business_id,
+                details={
+                    "documents_removed": len(doc_ids),
+                    "runs_removed": int(runs_count),
+                    "revisions_removed": int(revisions_count),
+                },
+            )
+        return WorkspaceDeleteResponse(
+            business_id=business_id,
+            documents_removed=len(doc_ids),
+            runs_removed=int(runs_count),
+            revisions_removed=int(revisions_count),
+            chat_note=WORKSPACE_CHAT_NOTE,
+            backup_notice=WORKSPACE_BACKUP_NOTICE,
+        )
