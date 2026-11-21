@@ -767,7 +767,7 @@ def delete_workspace(
                 _remove_file_and_empty_dirs(
                     document_file_path(owner_id, business_id, doc_id)
                 )
-            biz_dir = storage_root() / str(owner_id) / str(business_id)
+            biz_dir = get_storage_root() / str(owner_id) / str(business_id)
             if biz_dir.is_dir():
                 for child in biz_dir.iterdir():
                     if child.is_file() or child.is_symlink():

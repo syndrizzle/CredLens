@@ -1,0 +1,77 @@
+{
+  "pack_version": "eval-pack-v1",
+  "frozen_date": "2026-11-21",
+  "annotation_author": "CredLens agent / student team (proxy)",
+  "independent_checker": "pending_peer_check",
+  "reviewer_and_proxy_disclosure": {
+    "d02_finance_reviewer": "pending (financial rules remain provisional)",
+    "d05_usability_and_review": "student/faculty proxies only; no external target business owners or CPA sign-off"
+  },
+  "public_excerpts": {
+    "status": "deferred_by_d05",
+    "target": "Selected standalone pages from three HUL reporting years",
+    "reason": "User confirmed fictional-only pack for P5-03 on 2026-11-21 under D-05; HUL public excerpts remain a documented gap until supplied."
+  },
+  "held_out_policy": "malwa-gearworks-held-out.pdf (Layout C) is strictly reserved for unbiased P5-04 evaluation. Do not run financial extraction tuning against it.",
+  "question_counts": {
+    "total": 60,
+    "by_category": {
+      "numerical": 12,
+      "document": 12,
+      "missing_input": 12,
+      "inconsistent_input_period": 12,
+      "unsupported_causal_lending": 12
+    }
+  },
+  "artifacts": {
+    "cases.json": "b4efe98b42c39104a3dcb9a3db11583ceac65bdbb5bffd529d58969beac23b78",
+    "questions_60.json": "388b8d938291107c6cf5392d58d6c2c7f1987e01551b9bfddbd0a2b6ebfbfa64"
+  },
+  "pdfs": [
+    {
+      "file": "aster-eval.pdf",
+      "case_id": "aster_components",
+      "business_name": "Aster Components (fictional)",
+      "split": "evaluation",
+      "layout": "layout_a",
+      "page_count": 3,
+      "sha256": "e2d57ece4363030d2ae81b7713770e8fcc4ebcfc6215572a2eed3876247ff34b"
+    },
+    {
+      "file": "kaveri-precision.pdf",
+      "case_id": "kaveri_precision",
+      "business_name": "Kaveri Precision Castings (fictional)",
+      "split": "evaluation",
+      "layout": "layout_a",
+      "page_count": 3,
+      "sha256": "21296b8f77a47f0eae9cd8aa1b375c4f6026a7e686af11adfad18c1621bd1a75"
+    },
+    {
+      "file": "deccan-polymers.pdf",
+      "case_id": "deccan_polymers",
+      "business_name": "Deccan Polymer Packaging (fictional)",
+      "split": "evaluation",
+      "layout": "layout_a",
+      "page_count": 3,
+      "sha256": "00da7712c6a053c0dddd268b5bffe090fb8bf72f3375d39441ec0946ef51fdcd"
+    },
+    {
+      "file": "sahyadri-fasteners.pdf",
+      "case_id": "sahyadri_fasteners",
+      "business_name": "Sahyadri Fasteners (fictional)",
+      "split": "evaluation",
+      "layout": "layout_a",
+      "page_count": 3,
+      "sha256": "3bbf897019b89d2271ebab54a16b0614c8b8737e2548780fa3f25f30ac4a285e"
+    },
+    {
+      "file": "malwa-gearworks-held-out.pdf",
+      "case_id": "malwa_gearworks_held_out",
+      "business_name": "Malwa Precision Gearworks (fictional)",
+      "split": "held_out",
+      "layout": "layout_c",
+      "page_count": 3,
+      "sha256": "f36e4ef142fe778103e01958527116fbcde64e639ac7c88af1fb0602bacadbb5"
+    }
+  ]
+}
