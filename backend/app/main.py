@@ -7,6 +7,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.analysis_runs import load_analysis
 from app.analysis import analyse
 from app.audit import list_audit_events
 from app.auth import (
@@ -18,7 +19,7 @@ from app.auth import (
     revoke_session,
 )
 from app.database import check_database, get_engine
-from app.document_ingress import DocumentUploadGuard
+from app.document_ingress import DOCUMENT_UPLOAD_PATH, DocumentUploadGuard
 from app.documents import (
     DocumentRejectError,
     delete_document,
@@ -33,7 +34,6 @@ from app.documents import (
 from app.persistence import (
     InvalidFigureSourceError,
     list_businesses,
-    load_analysis,
     load_workspace,
     save_analysis,
     save_business,
@@ -42,22 +42,20 @@ from app.persistence import (
 from app.qa import answer_workspace_question, load_qa_context
 from app.reports import generate_report, list_reports, load_report
 from app.retrieval import EmbeddingUnavailableError, retrieve_passages
-from app.schemas import (
-    AnalysisRequest,
-    AnalysisResponse,
-    AnalysisRunResponse,
-    AuditEventSummary,
-    BusinessSummary,
-    CredentialsRequest,
-    DocumentExtractionResponse,
-    DocumentSummary,
-    PreparationReportResponse,
+from app.schemas.audit import AuditEventSummary
+from app.schemas.auth import CredentialsRequest, SessionResponse
+from app.schemas.documents import DocumentExtractionResponse, DocumentSummary
+from app.schemas.evidence import (
     QARequest,
     QAResponse,
-    ReportSummary,
     RetrievalRequest,
     RetrievalResponse,
-    SessionResponse,
+)
+from app.schemas.financial import AnalysisRequest, AnalysisResponse
+from app.schemas.reports import PreparationReportResponse, ReportSummary
+from app.schemas.workspaces import (
+    AnalysisRunResponse,
+    BusinessSummary,
     UpdateBusinessRequest,
     WorkspaceDeleteResponse,
     WorkspaceResponse,
@@ -93,6 +91,25 @@ def require_session(connection, request: Request) -> SessionResponse:
         return resolve_session(connection, request.cookies.get(SESSION_COOKIE))
     except PermissionError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from None
+
+
+@contextmanager
+def session_transaction(request: Request):
+    with db_transaction() as connection:
+        yield connection, require_session(connection, request)
+
+
+def authenticated_session(request: Request) -> SessionResponse:
+    with session_transaction(request) as (_, session):
+        return session
+
+
+@contextmanager
+def not_found():
+    try:
+        yield
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
 
 
 @app.exception_handler(RequestValidationError)
@@ -181,15 +198,13 @@ def current_session(request: Request) -> SessionResponse:
 
 @app.get("/api/businesses", response_model=list[BusinessSummary])
 def get_businesses(request: Request) -> list[BusinessSummary]:
-    with db_transaction() as connection:
-        session = require_session(connection, request)
+    with session_transaction(request) as (connection, session):
         return list_businesses(connection, session.owner_id)
 
 
 @app.post("/api/businesses", response_model=WorkspaceResponse, status_code=201)
 def create_business(payload: AnalysisRequest, request: Request) -> WorkspaceResponse:
-    with db_transaction() as connection:
-        session = require_session(connection, request)
+    with session_transaction(request) as (connection, session):
         try:
             business_id = save_business(connection, session.owner_id, payload)
         except InvalidFigureSourceError as exc:
@@ -201,8 +216,7 @@ def create_business(payload: AnalysisRequest, request: Request) -> WorkspaceResp
 def replace_business(
     business_id: UUID, payload: UpdateBusinessRequest, request: Request
 ) -> WorkspaceResponse:
-    with db_transaction() as connection:
-        session = require_session(connection, request)
+    with session_transaction(request) as (connection, session):
         try:
             update_business(
                 connection,
@@ -222,12 +236,8 @@ def replace_business(
 
 @app.get("/api/businesses/{business_id}", response_model=WorkspaceResponse)
 def get_business(business_id: UUID, request: Request) -> WorkspaceResponse:
-    with db_transaction() as connection:
-        session = require_session(connection, request)
-        try:
-            return load_workspace(connection, session.owner_id, business_id)
-        except LookupError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from None
+    with session_transaction(request) as (connection, session), not_found():
+        return load_workspace(connection, session.owner_id, business_id)
 
 
 @app.post(
@@ -236,23 +246,15 @@ def get_business(business_id: UUID, request: Request) -> WorkspaceResponse:
     status_code=201,
 )
 def create_business_analysis(business_id: UUID, request: Request) -> WorkspaceResponse:
-    with db_transaction() as connection:
-        session = require_session(connection, request)
-        try:
-            save_analysis(connection, session.owner_id, business_id)
-            return load_workspace(connection, session.owner_id, business_id)
-        except LookupError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from None
+    with session_transaction(request) as (connection, session), not_found():
+        save_analysis(connection, session.owner_id, business_id)
+        return load_workspace(connection, session.owner_id, business_id)
 
 
 @app.get("/api/analysis-runs/{run_id}", response_model=AnalysisRunResponse)
 def get_analysis_run(run_id: UUID, request: Request) -> AnalysisRunResponse:
-    with db_transaction() as connection:
-        session = require_session(connection, request)
-        try:
-            return load_analysis(connection, session.owner_id, run_id)
-        except LookupError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from None
+    with session_transaction(request) as (connection, session), not_found():
+        return load_analysis(connection, session.owner_id, run_id)
 
 
 @app.get(
@@ -262,12 +264,8 @@ def get_analysis_run(run_id: UUID, request: Request) -> AnalysisRunResponse:
 def get_business_documents(
     business_id: UUID, request: Request
 ) -> list[DocumentSummary]:
-    with db_transaction() as connection:
-        session = require_session(connection, request)
-        try:
-            return list_documents(connection, session.owner_id, business_id)
-        except LookupError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from None
+    with session_transaction(request) as (connection, session), not_found():
+        return list_documents(connection, session.owner_id, business_id)
 
 
 @contextmanager
@@ -289,7 +287,7 @@ def document_errors():
 
 
 @app.post(
-    "/api/businesses/{business_id}/documents",
+    DOCUMENT_UPLOAD_PATH,
     response_model=DocumentSummary,
     status_code=201,
 )
@@ -297,8 +295,7 @@ def upload_business_document(
     business_id: UUID, request: Request, file: UploadFile = File(...)
 ) -> DocumentSummary:
     try:
-        with db_transaction() as connection:
-            session = require_session(connection, request)
+        session = authenticated_session(request)
         with document_errors():
             return upload_and_process_document(
                 get_engine(),
@@ -319,8 +316,7 @@ def upload_business_document(
 def retry_business_document(
     business_id: UUID, document_id: UUID, request: Request
 ) -> DocumentSummary:
-    with db_transaction() as connection:
-        session = require_session(connection, request)
+    session = authenticated_session(request)
     with document_errors():
         return retry_document_processing(
             get_engine(), session.owner_id, business_id, document_id
@@ -334,8 +330,7 @@ def retry_business_document(
 def read_business_document_extraction(
     business_id: UUID, document_id: UUID, request: Request
 ) -> DocumentExtractionResponse:
-    with db_transaction() as connection:
-        session = require_session(connection, request)
+    with session_transaction(request) as (connection, session):
         with document_errors():
             return get_document_extraction(
                 connection, session.owner_id, business_id, document_id
@@ -353,8 +348,7 @@ def read_business_document_extraction(
 def extract_ready_business_document(
     business_id: UUID, document_id: UUID, request: Request
 ) -> DocumentExtractionResponse:
-    with db_transaction() as connection:
-        session = require_session(connection, request)
+    session = authenticated_session(request)
     with document_errors():
         return extract_ready_document(
             get_engine(), session.owner_id, business_id, document_id
@@ -365,14 +359,10 @@ def extract_ready_business_document(
 def download_business_document(
     business_id: UUID, document_id: UUID, request: Request
 ) -> FileResponse:
-    with db_transaction() as connection:
-        session = require_session(connection, request)
-        try:
-            doc, path = get_document_file(
-                connection, session.owner_id, business_id, document_id
-            )
-        except LookupError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from None
+    with session_transaction(request) as (connection, session), not_found():
+        doc, path = get_document_file(
+            connection, session.owner_id, business_id, document_id
+        )
     safe_ascii = (
         doc.filename.encode("ascii", "replace").decode("ascii").replace('"', "_")
     )
@@ -392,8 +382,7 @@ def download_business_document(
 def remove_business_document(
     business_id: UUID, document_id: UUID, request: Request
 ) -> dict[str, str]:
-    with db_transaction() as connection:
-        session = require_session(connection, request)
+    session = authenticated_session(request)
     with document_errors():
         delete_document(get_engine(), session.owner_id, business_id, document_id)
     return {"status": "deleted"}
@@ -406,8 +395,7 @@ def remove_business_document(
 def search_business_passages(
     business_id: UUID, payload: RetrievalRequest, request: Request
 ) -> RetrievalResponse:
-    with db_transaction() as connection:
-        session = require_session(connection, request)
+    with session_transaction(request) as (connection, session):
         try:
             return retrieve_passages(
                 connection,
@@ -432,20 +420,16 @@ def ask_business_question(
     business_id: UUID, payload: QARequest, request: Request
 ) -> QAResponse:
     # Close DB transaction before local LLM inference so connections are never held idle.
-    with db_transaction() as connection:
-        session = require_session(connection, request)
-        try:
-            context = load_qa_context(
-                connection,
-                session.owner_id,
-                business_id,
-                payload.question,
-                top_k=payload.top_k,
-                year_start=payload.year_start,
-                document_id=payload.document_id,
-            )
-        except LookupError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from None
+    with session_transaction(request) as (connection, session), not_found():
+        context = load_qa_context(
+            connection,
+            session.owner_id,
+            business_id,
+            payload.question,
+            top_k=payload.top_k,
+            year_start=payload.year_start,
+            document_id=payload.document_id,
+        )
     return answer_workspace_question(
         context,
         payload.question,
@@ -459,12 +443,8 @@ def ask_business_question(
     response_model=list[ReportSummary],
 )
 def get_business_reports(business_id: UUID, request: Request) -> list[ReportSummary]:
-    with db_transaction() as connection:
-        session = require_session(connection, request)
-        try:
-            return list_reports(connection, session.owner_id, business_id)
-        except LookupError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from None
+    with session_transaction(request) as (connection, session), not_found():
+        return list_reports(connection, session.owner_id, business_id)
 
 
 @app.post(
@@ -474,12 +454,8 @@ def get_business_reports(business_id: UUID, request: Request) -> list[ReportSumm
 def create_business_report(
     business_id: UUID, request: Request
 ) -> PreparationReportResponse:
-    with db_transaction() as connection:
-        session = require_session(connection, request)
-        try:
-            return generate_report(connection, session.owner_id, business_id)
-        except LookupError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from None
+    with session_transaction(request) as (connection, session), not_found():
+        return generate_report(connection, session.owner_id, business_id)
 
 
 @app.get(
@@ -489,12 +465,8 @@ def create_business_report(
 def get_business_report(
     business_id: UUID, report_id: UUID, request: Request
 ) -> PreparationReportResponse:
-    with db_transaction() as connection:
-        session = require_session(connection, request)
-        try:
-            return load_report(connection, session.owner_id, business_id, report_id)
-        except LookupError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from None
+    with session_transaction(request) as (connection, session), not_found():
+        return load_report(connection, session.owner_id, business_id, report_id)
 
 
 @app.delete(
@@ -502,8 +474,7 @@ def get_business_report(
     response_model=WorkspaceDeleteResponse,
 )
 def remove_business(business_id: UUID, request: Request) -> WorkspaceDeleteResponse:
-    with db_transaction() as connection:
-        session = require_session(connection, request)
+    session = authenticated_session(request)
     with document_errors():
         return delete_workspace(get_engine(), session.owner_id, business_id)
 
@@ -517,8 +488,7 @@ def get_audit_events(
     business_id: UUID | None = None,
     limit: int = Query(default=50, ge=1, le=100),
 ) -> list[AuditEventSummary]:
-    with db_transaction() as connection:
-        session = require_session(connection, request)
+    with session_transaction(request) as (connection, session):
         return list_audit_events(
             connection, session.owner_id, business_id=business_id, limit=limit
         )

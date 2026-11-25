@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   Alert02Icon,
@@ -23,6 +23,7 @@ import {
   fetchReport,
   generateReport,
   type AnalysisRunSummary,
+  type DocumentSummary,
   type EvidenceState,
   type Indicator,
   type PreparationReportResponse,
@@ -43,6 +44,7 @@ type PreparationReportPanelProps = {
   hasUnsavedChanges: boolean;
   disabled?: boolean;
   activeReport: PreparationReportResponse | null;
+  documents: DocumentSummary[];
   onActiveReportChange: (report: PreparationReportResponse | null) => void;
   onReportGenerated?: (report: PreparationReportResponse) => void;
 };
@@ -100,11 +102,15 @@ export function PreparationReportPanel({
   hasUnsavedChanges,
   disabled = false,
   activeReport,
+  documents,
   onActiveReportChange,
   onReportGenerated,
 }: PreparationReportPanelProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const pending = useRef<AbortController | null>(null);
+
+  useEffect(() => () => pending.current?.abort(), []);
 
   // Assign chronological 1-based version numbers matching backend _index_runs.
   const versionByRunId = new Map<string, number>();
@@ -118,40 +124,29 @@ export function PreparationReportPanel({
       versionByRunId.set(run.run_id, index + 1);
     });
 
-  async function handleGenerate() {
-    if (disabled || loading || hasUnsavedChanges) return;
+  async function handleReportRequest(reportId?: string) {
+    if (disabled || pending.current || (!reportId && hasUnsavedChanges)) return;
+    const controller = new AbortController();
+    pending.current = controller;
     setLoading(true);
     setError(null);
     try {
-      const report = await generateReport(businessId);
+      const report = reportId
+        ? await fetchReport(businessId, reportId, controller.signal)
+        : await generateReport(businessId, controller.signal);
+      if (controller.signal.aborted) return;
       onActiveReportChange(report);
-      onReportGenerated?.(report);
+      if (!reportId) onReportGenerated?.(report);
     } catch (caught) {
+      if (controller.signal.aborted) return;
       setError(
         caught instanceof Error
           ? caught.message
-          : "Could not generate preparation report.",
+          : "Could not open preparation report.",
       );
     } finally {
-      setLoading(false);
-    }
-  }
-
-  async function handleOpenVersion(reportId: string) {
-    if (disabled || loading) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const report = await fetchReport(businessId, reportId);
-      onActiveReportChange(report);
-    } catch (caught) {
-      setError(
-        caught instanceof Error
-          ? caught.message
-          : "Could not load preparation report.",
-      );
-    } finally {
-      setLoading(false);
+      pending.current = null;
+      if (!controller.signal.aborted) setLoading(false);
     }
   }
 
@@ -186,7 +181,7 @@ export function PreparationReportPanel({
           <div className="flex flex-wrap items-center gap-2">
             <Button
               type="button"
-              onClick={() => void handleGenerate()}
+              onClick={() => void handleReportRequest()}
               disabled={disabled || loading || hasUnsavedChanges}
             >
               {loading
@@ -199,7 +194,7 @@ export function PreparationReportPanel({
                   type="button"
                   variant="outline"
                   onClick={() => window.print()}
-                  disabled={loading}
+                  disabled={disabled || loading}
                 >
                   Print / Save as PDF
                 </Button>
@@ -258,7 +253,7 @@ export function PreparationReportPanel({
                         variant={isOpen ? "secondary" : "outline"}
                         size="sm"
                         disabled={disabled || loading}
-                        onClick={() => void handleOpenVersion(run.run_id)}
+                        onClick={() => void handleReportRequest(run.run_id)}
                       >
                         {isOpen
                           ? "Viewing"
@@ -284,6 +279,8 @@ export function PreparationReportPanel({
         <PreparationReportSheet
           report={activeReport}
           currentWorkspaceRevision={inputRevision}
+          supersededByNewRun={runs.some((run) => run.run_id === activeReport.report_id && run.superseded)}
+          documents={documents}
           businessId={businessId}
         />
       ) : null}
@@ -294,10 +291,14 @@ export function PreparationReportPanel({
 export function PreparationReportSheet({
   report,
   currentWorkspaceRevision,
+  supersededByNewRun = false,
+  documents,
   businessId,
 }: {
   report: PreparationReportResponse;
   currentWorkspaceRevision?: number;
+  supersededByNewRun?: boolean;
+  documents?: DocumentSummary[];
   businessId?: string;
 }) {
   const effectiveCurrentRev = Math.max(
@@ -305,7 +306,7 @@ export function PreparationReportSheet({
     currentWorkspaceRevision ?? report.current_input_revision,
   );
   const isSuperseded =
-    report.superseded || report.input_revision < effectiveCurrentRev;
+    report.superseded || supersededByNewRun || report.input_revision < effectiveCurrentRev;
   const supersededMessage =
     report.superseded_reason ??
     (report.input_revision < effectiveCurrentRev
@@ -415,7 +416,7 @@ export function PreparationReportSheet({
           1. Six Financial Indicators &amp; Balance-Sheet Consistency
         </h3>
         {report.analysis.periods.map((period) => (
-          <div key={period.year_start} className="space-y-2 print-avoid-break">
+          <div key={period.year_start} className="space-y-2">
             <h4 className="font-heading text-base font-medium">
               {financialYearLabel(period.year_start)}
             </h4>
@@ -505,7 +506,7 @@ export function PreparationReportSheet({
         ))}
       </section>
 
-      <section className="space-y-3 print-avoid-break">
+      <section className="space-y-3">
         <h3 className="font-heading text-lg font-semibold">
           2. Missing, Unreviewed &amp; Blocked Evidence
         </h3>
@@ -553,7 +554,7 @@ export function PreparationReportSheet({
         )}
       </section>
 
-      <section className="space-y-3 print-avoid-break">
+      <section className="space-y-3">
         <h3 className="font-heading text-lg font-semibold">
           3. Ordered Preparation Actions
         </h3>
@@ -596,7 +597,7 @@ export function PreparationReportSheet({
           4. Submitted Figures, Origins &amp; Review States
         </h3>
         {sortedPeriods.map((period) => (
-          <div key={period.year_start} className="space-y-2 print-avoid-break">
+          <div key={period.year_start} className="space-y-2">
             <h4 className="font-heading text-base font-medium">
               {financialYearLabel(period.year_start)} ·{" "}
               {unitLabel(period.unit)} ·{" "}
@@ -672,8 +673,8 @@ export function PreparationReportSheet({
               <li key={`${doc.document_id ?? "detached"}-${doc.filename}`}>
                 <span className="font-medium">{doc.filename}</span> · Pages{" "}
                 {doc.pages.join(", ")}
-                {doc.detached ? (
-                  " · Source PDF later removed (detached provenance)"
+                {doc.detached || (documents && !documents.some((source) => source.id === doc.document_id && source.status === "ready")) ? (
+                  " · Source PDF unavailable (historical provenance)"
                 ) : businessId && doc.document_id ? (
                   <span className="print:hidden">
                     {" "}

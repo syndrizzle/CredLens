@@ -77,3 +77,16 @@ def build_minimal_pdf(pages_text: list[str], encrypt: bool = False) -> bytes:
         else:
             streams.append(b"")
     return build_pdf(streams, encrypt=encrypt)
+
+
+def inspect_pdf_bytes(data: bytes):
+    import io
+    import tempfile
+    from pathlib import Path
+
+    from app.pdf_processing import inspect_pdf_file, read_bounded_upload
+
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "input.pdf"
+        path.write_bytes(read_bounded_upload(io.BytesIO(data), "application/pdf"))
+        return inspect_pdf_file(path)

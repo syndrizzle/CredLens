@@ -44,6 +44,7 @@ let auditPending = deferred();
 const restoration = deferred();
 let logoutFailure: "http" | "network" | null = "http";
 const calls: string[] = [];
+let reportSignal: AbortSignal | null | undefined;
 globalThis.fetch = async (input, options) => {
   const path = String(input);
   calls.push(`${options?.method ?? "GET"} ${path}`);
@@ -56,7 +57,10 @@ globalThis.fetch = async (input, options) => {
     return Response.json(["a", "b"].map(id => ({ id, business_name: `Business ${id}`, input_revision: 1 })));
   }
   if (path.startsWith("/api/audit-events")) return auditPending.promise;
-  if (path.includes("/reports")) return reportPending.promise;
+  if (path.includes("/reports")) {
+    reportSignal = options?.signal;
+    return reportPending.promise;
+  }
   if (path.endsWith("/qa")) return qaPending.promise;
   if (path.includes("/documents")) return docPending.promise;
   return path.endsWith("/analysis") ? analysisPending.promise : pending.promise;
@@ -361,7 +365,7 @@ async function run() {
   reportPending = deferred();
   await click(button("Open superseded report"));
   check(calls.includes("GET /api/businesses/a/reports/r1"), "Opening historical version fetches report endpoint");
-  await act(async () => reportPending.resolve(Response.json({
+  const historicalReport = {
     report_id: "r1", business_id: "a", report_version: 1, input_revision: 1, current_input_revision: 2,
     rule_version: "financial-rules-v1", action_version: "preparation-actions-v1",
     superseded: true, superseded_reason: "Superseded by workspace input revision 2.",
@@ -370,7 +374,8 @@ async function run() {
     inputs: { ...payload, business_name: "Edited after analysis" }, analysis: fakeAnalysis,
     missing_evidence: [{ year_start: 2023, fields: ["revenue"], code: "unreviewed", state: "Needs review", message: "Review figures.", affected_analyses: ["net_profit_margin"] }],
     documents_referenced: [], limitations: ["Provisional rules pending finance review."],
-  })));
+  };
+  await act(async () => reportPending.resolve(Response.json(historicalReport)));
   check(Boolean(document.querySelector("#preparation-report-sheet")) && text().includes("SUPERSEDED") && text().includes("Superseded by workspace input revision 2."), "Historical report renders SUPERSEDED banner and reason");
 
   reportPending = deferred();
@@ -432,6 +437,8 @@ async function run() {
   await click(button("Cancel"));
   check(!text().includes("Delete workspace permanently"), "Cancelling delete keeps workspace intact");
 
+  reportPending = deferred();
+  await click(button("Viewing"));
   await click(button("Delete workspace"));
   pending = deferred();
   auditPending = deferred();
@@ -449,6 +456,12 @@ async function run() {
     }]));
   });
   check(name().value === "" && text().includes("not immediately purged") && text().includes("workspace_deleted"), "Workspace deletion clears form, discloses backup limits, and logs workspace_deleted");
+  check(reportSignal?.aborted, "Deleting a workspace aborts its pending report request");
+  pending = deferred();
+  await chooseWorkspace("Business b");
+  await act(async () => pending.resolve(Response.json(workspace("b", "Business b"))));
+  await act(async () => reportPending.resolve(Response.json(historicalReport)));
+  check(!document.querySelector("#preparation-report-sheet"), "A late report cannot open in another workspace");
 
   await rename("Temporary draft");
   await click(button("New workspace"));

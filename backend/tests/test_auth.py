@@ -15,7 +15,7 @@ from app.database import get_engine
 from app.main import app
 import app.main as main_module
 from app.models import accounts, businesses, owners, sessions
-from app.schemas import CredentialsRequest
+from app.schemas.auth import CredentialsRequest
 
 
 def test_password_hashing_uses_scrypt_and_random_salt():
@@ -55,7 +55,6 @@ def test_protected_routes_return_503_when_database_unavailable(monkeypatch):
         raise RuntimeError("Database not configured")
         yield
 
-    monkeypatch.setattr(main_module, " get_engine", lambda: (_ for _ in ()).throw(RuntimeError("no db")), raising=False)
     monkeypatch.setattr(main_module, "get_engine", lambda: (_ for _ in ()).throw(RuntimeError("no db")))
     client = TestClient(app)
     assert client.get("/api/auth/session").status_code == 503

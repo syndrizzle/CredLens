@@ -34,7 +34,7 @@ function engine(form: FormDraft): AnalysisResponse {
     [
       python,
       "-c",
-      "import json,sys; from app.schemas import AnalysisRequest; from app.analysis import analyse; print(analyse(AnalysisRequest.model_validate(json.load(sys.stdin))).model_dump_json())",
+      "import json,sys; from app.schemas.financial import AnalysisRequest; from app.analysis import analyse; print(analyse(AnalysisRequest.model_validate(json.load(sys.stdin))).model_dump_json())",
     ],
     {
       env: { ...Bun.env, PYTHONPATH: "backend" },

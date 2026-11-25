@@ -142,4 +142,13 @@
     break-inside: avoid;
     page-break-inside: avoid;
   }
+  #preparation-report-sheet :is(h3, h4, thead) {
+    break-after: avoid;
+  }
+  #preparation-report-sheet :is(tr, li) {
+    break-inside: avoid;
+  }
+  #preparation-report-sheet .overflow-x-auto {
+    overflow: visible;
+  }
 }

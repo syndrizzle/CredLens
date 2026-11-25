@@ -1,4 +1,3 @@
-import json
 from decimal import Context, localcontext
 from uuid import UUID, uuid4
 
@@ -6,19 +5,18 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Connection
 
-from app.analysis import MULTIPLIERS, analyse
+from app.analysis import analyse
+from app.analysis_runs import RunHistory, load_run_history, load_run_payload, parse_analysis
 from app.audit import record_audit_event
 from app.documents import list_documents
 from app.models import analysis_runs, businesses, documents, figures, periods, revisions
-from app.schemas import (
-    AnalysisRequest,
-    AnalysisResponse,
-    AnalysisRunResponse,
-    AnalysisRunSummary,
+from app.schemas.documents import DocumentExtractionSnapshot
+from app.schemas.financial import AnalysisRequest, AnalysisResponse, UNIT_MULTIPLIERS
+from app.schemas.workspaces import (
     BusinessSummary,
-    DocumentExtractionSnapshot,
     WorkspaceResponse,
 )
+from app.workspace_access import document_scope, owned_business
 
 
 class InvalidFigureSourceError(Exception):
@@ -52,8 +50,7 @@ def _validate_document_sources(
                 select(documents.c.id, documents.c.filename, documents.c.extraction)
                 .where(
                     documents.c.id.in_(doc_ids),
-                    documents.c.business_id == business_id,
-                    documents.c.owner_id == owner_id,
+                    *document_scope(owner_id, business_id),
                     documents.c.status == "ready",
                 )
                 .with_for_update(read=True, key_share=True)
@@ -125,20 +122,6 @@ def _validate_document_sources(
             )
 
 
-def owned_business(
-    connection: Connection, owner_id: UUID, business_id: UUID, for_update: bool = False
-):
-    stmt = select(businesses).where(
-        businesses.c.id == business_id, businesses.c.owner_id == owner_id
-    )
-    if for_update:
-        stmt = stmt.with_for_update()
-    row = connection.execute(stmt).mappings().one_or_none()
-    if row is None:
-        raise LookupError("Business not found")
-    return row
-
-
 def _insert_periods(
     connection: Connection,
     owner_id: UUID,
@@ -149,7 +132,7 @@ def _insert_periods(
 ) -> None:
     for period in request.periods:
         period_id = uuid4()
-        multiplier = MULTIPLIERS[period.unit]
+        multiplier = UNIT_MULTIPLIERS[period.unit]
         connection.execute(
             periods.insert().values(
                 id=period_id,
@@ -216,57 +199,50 @@ def _insert_periods(
 def _load_business_with_revision(
     connection: Connection, owner_id: UUID, business_id: UUID, for_update: bool = False
 ) -> tuple[int, AnalysisRequest]:
-    while True:
-        business = owned_business(
-            connection, owner_id, business_id, for_update=for_update
+    if for_update:
+        owned_business(connection, owner_id, business_id, for_update=True)
+    rows = connection.execute(
+        select(
+            businesses.c.input_revision,
+            businesses.c.name,
+            businesses.c.currency,
+            businesses.c.basis,
+            periods.c.year_start,
+            periods.c.unit,
+            periods.c.comparable_to_prior,
+            figures.c.field,
+            figures.c.raw,
+            figures.c.origin,
+            figures.c.reviewed,
+            figures.c.revision,
+            figures.c.source_meta,
+            figures.c.source_document_id,
         )
-        period_rows = (
-            connection.execute(
-                select(periods)
-                .where(periods.c.business_id == business_id)
-                .order_by(periods.c.year_start)
-            )
-            .mappings()
-            .all()
-        )
-        saved_periods = []
-        for period in period_rows:
-            values = {}
-            for row in connection.execute(
-                select(figures).where(figures.c.period_id == period["id"])
-            ).mappings():
-                item = {
-                    key: row[key] for key in ("raw", "origin", "reviewed", "revision")
-                }
-                if row["origin"] == "document" and row["source_meta"] is not None:
-                    item["source"] = {
-                        "document_id": row["source_document_id"],
-                        **row["source_meta"],
-                    }
-                values[row["field"]] = item
-            saved_periods.append(
-                dict(
-                    year_start=period["year_start"],
-                    unit=period["unit"],
-                    comparable_to_prior=period["comparable_to_prior"],
-                    values=values,
-                )
-            )
-        if for_update:
-            return business["input_revision"], AnalysisRequest(
-                business_name=business["name"],
-                currency=business["currency"],
-                basis=business["basis"],
-                periods=saved_periods,
-            )
-        after = owned_business(connection, owner_id, business_id)
-        if after["input_revision"] == business["input_revision"] and saved_periods:
-            return after["input_revision"], AnalysisRequest(
-                business_name=after["name"],
-                currency=after["currency"],
-                basis=after["basis"],
-                periods=saved_periods,
-            )
+        .select_from(businesses.outerjoin(periods).outerjoin(figures))
+        .where(businesses.c.id == business_id, businesses.c.owner_id == owner_id)
+        .order_by(periods.c.year_start)
+    ).mappings().all()
+    if not rows:
+        raise LookupError("Business not found")
+    first = rows[0]
+    saved_periods = {}
+    for row in rows:
+        year = row["year_start"]
+        if year is None:
+            continue
+        period = saved_periods.setdefault(year, {
+            "year_start": year, "unit": row["unit"],
+            "comparable_to_prior": row["comparable_to_prior"], "values": {},
+        })
+        if row["field"] is not None:
+            figure = {key: row[key] for key in ("raw", "origin", "reviewed", "revision")}
+            if row["origin"] == "document" and row["source_meta"] is not None:
+                figure["source"] = {"document_id": row["source_document_id"], **row["source_meta"]}
+            period["values"][row["field"]] = figure
+    return first["input_revision"], AnalysisRequest(
+        business_name=first["name"], currency=first["currency"],
+        basis=first["basis"], periods=list(saved_periods.values()),
+    )
 
 
 def save_business(
@@ -286,7 +262,7 @@ def save_business(
     )
     _insert_periods(connection, owner_id, business_id, request)
     _, saved = _load_business_with_revision(
-        connection, owner_id, business_id, for_update=True
+        connection, owner_id, business_id
     )
     connection.execute(
         revisions.insert().values(
@@ -300,7 +276,6 @@ def save_business(
         connection,
         owner_id,
         "workspace_created",
-        "workspace",
         resource_id=business_id,
         business_id=business_id,
         details={"input_revision": 1},
@@ -321,7 +296,7 @@ def update_business(
             "Workspace has been updated in another session; reload before saving"
         )
     _, prior = _load_business_with_revision(
-        connection, owner_id, business_id, for_update=True
+        connection, owner_id, business_id
     )
     connection.execute(
         pg_insert(revisions)
@@ -372,7 +347,7 @@ def update_business(
         connection, owner_id, business_id, request, prior_periods, max_revisions
     )
     _, saved = _load_business_with_revision(
-        connection, owner_id, business_id, for_update=True
+        connection, owner_id, business_id
     )
     connection.execute(
         revisions.insert().values(
@@ -386,7 +361,6 @@ def update_business(
         connection,
         owner_id,
         "workspace_updated",
-        "workspace",
         resource_id=business_id,
         business_id=business_id,
         details={"input_revision": next_revision},
@@ -402,13 +376,8 @@ def load_business(
 
 def save_analysis(connection: Connection, owner_id: UUID, business_id: UUID) -> UUID:
     input_revision, request = _load_business_with_revision(
-        connection, owner_id, business_id
+        connection, owner_id, business_id, for_update=True
     )
-    locked = owned_business(connection, owner_id, business_id, for_update=True)
-    if locked["input_revision"] != input_revision:
-        input_revision, request = _load_business_with_revision(
-            connection, owner_id, business_id, for_update=True
-        )
     result = analyse(request)
     run_id = uuid4()
     connection.execute(
@@ -425,60 +394,11 @@ def save_analysis(connection: Connection, owner_id: UUID, business_id: UUID) -> 
         connection,
         owner_id,
         "analysis_run_created",
-        "analysis_run",
         resource_id=run_id,
         business_id=business_id,
         details={"input_revision": input_revision},
     )
     return run_id
-
-
-def load_analysis(
-    connection: Connection, owner_id: UUID, run_id: UUID
-) -> AnalysisRunResponse:
-    latest_run_id = (
-        select(analysis_runs.c.id)
-        .where(analysis_runs.c.business_id == businesses.c.id)
-        .correlate(businesses)
-        .order_by(
-            analysis_runs.c.input_revision.desc(),
-            analysis_runs.c.created_at.desc(),
-            analysis_runs.c.id.desc(),
-        )
-        .limit(1)
-        .scalar_subquery()
-    )
-    row = (
-        connection.execute(
-            select(
-                analysis_runs.c.id,
-                analysis_runs.c.business_id,
-                analysis_runs.c.input_revision,
-                analysis_runs.c.results,
-                analysis_runs.c.created_at,
-                businesses.c.input_revision.label("current_input_revision"),
-                latest_run_id.label("latest_run_id"),
-            )
-            .join(businesses, analysis_runs.c.business_id == businesses.c.id)
-            .where(analysis_runs.c.id == run_id, businesses.c.owner_id == owner_id)
-        )
-        .mappings()
-        .one_or_none()
-    )
-    if row is None:
-        raise LookupError("Analysis not found")
-    parsed = AnalysisResponse.model_validate_json(json.dumps(row["results"]))
-    return AnalysisRunResponse(
-        **parsed.model_dump(),
-        run_id=row["id"],
-        business_id=row["business_id"],
-        input_revision=row["input_revision"],
-        superseded=not (
-            row["input_revision"] == row["current_input_revision"]
-            and row["id"] == row["latest_run_id"]
-        ),
-        created_at=row["created_at"],
-    )
 
 
 def list_businesses(connection: Connection, owner_id: UUID) -> list[BusinessSummary]:
@@ -497,66 +417,33 @@ def list_businesses(connection: Connection, owner_id: UUID) -> list[BusinessSumm
     ]
 
 
+def load_workspace_analysis(
+    connection: Connection, owner_id: UUID, business_id: UUID
+) -> tuple[AnalysisRequest, RunHistory, AnalysisResponse | None]:
+    # Keep the input and history snapshots on the same revision under READ COMMITTED.
+    while True:
+        revision, request = _load_business_with_revision(connection, owner_id, business_id)
+        history = load_run_history(connection, owner_id, business_id)
+        if history.revision == revision:
+            break
+    current_id = history.current_id
+    latest = (
+        parse_analysis(load_run_payload(connection, owner_id, business_id, current_id)["results"])
+        if current_id is not None else None
+    )
+    return request, history, latest
+
+
 def load_workspace(
     connection: Connection, owner_id: UUID, business_id: UUID
 ) -> WorkspaceResponse:
-    while True:
-        input_revision, request = _load_business_with_revision(
-            connection, owner_id, business_id
-        )
-        run_rows = (
-            connection.execute(
-                select(
-                    analysis_runs.c.id,
-                    analysis_runs.c.input_revision,
-                    analysis_runs.c.rule_version,
-                    analysis_runs.c.results,
-                    analysis_runs.c.created_at,
-                )
-                .where(analysis_runs.c.business_id == business_id)
-                .order_by(
-                    analysis_runs.c.input_revision.desc(),
-                    analysis_runs.c.created_at.desc(),
-                    analysis_runs.c.id.desc(),
-                )
-            )
-            .mappings()
-            .all()
-        )
-        after = owned_business(connection, owner_id, business_id)
-        if after["input_revision"] == input_revision and (
-            not run_rows or run_rows[0]["input_revision"] <= input_revision
-        ):
-            break
-    current_run = (
-        run_rows[0]
-        if run_rows and run_rows[0]["input_revision"] == input_revision
-        else None
-    )
-    latest = (
-        AnalysisResponse.model_validate_json(json.dumps(current_run["results"]))
-        if current_run
-        else None
-    )
-    runs = [
-        AnalysisRunSummary(
-            run_id=row["id"],
-            input_revision=row["input_revision"],
-            rule_version=row["rule_version"],
-            action_version=row["results"].get("action_version")
-            if isinstance(row["results"], dict)
-            else None,
-            superseded=not (index == 0 and row["input_revision"] == input_revision),
-            created_at=row["created_at"],
-        )
-        for index, row in enumerate(run_rows)
-    ]
+    request, history, latest = load_workspace_analysis(connection, owner_id, business_id)
     return WorkspaceResponse(
         business_id=business_id,
-        input_revision=input_revision,
+        input_revision=history.revision,
         request=request,
-        latest_run_id=current_run["id"] if current_run else None,
+        latest_run_id=history.current_id,
         latest_analysis=latest,
-        runs=runs,
+        runs=history.summaries(),
         documents=list_documents(connection, owner_id, business_id),
     )

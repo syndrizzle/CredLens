@@ -7,24 +7,21 @@ from uuid import uuid4
 import pytest
 from app.database import get_engine
 from app.documents import (
-    MAX_PDF_BYTES,
-    DocumentRejectError,
     delete_document,
     document_file_path,
     get_document_file,
-    inspect_pdf_bytes,
     list_documents,
-    read_bounded_upload,
     retry_document_processing,
-    sanitize_pdf_filename,
     upload_and_process_document,
 )
 from app.main import app
+from app.pdf_limits import MAX_PDF_BYTES
+from app.pdf_processing import DocumentRejectError, read_bounded_upload, sanitize_pdf_filename
 from app.models import businesses, documents, owners
 from app.persistence import load_workspace, save_business
-from app.schemas import AnalysisRequest
+from app.schemas.financial import AnalysisRequest
 from fastapi.testclient import TestClient
-from pdf_helpers import build_minimal_pdf
+from pdf_helpers import build_minimal_pdf, inspect_pdf_bytes
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
@@ -61,7 +58,8 @@ def test_unit_pdf_filename_size_header_pages_and_scanned_validation():
     assert exc_info.value.code == "file_too_large"
 
     digital_pdf = build_minimal_pdf(["Revenue 12,50,000", "Profit After Tax 1,80,000"])
-    pages, chars = inspect_pdf_bytes(digital_pdf)
+    snapshot = inspect_pdf_bytes(digital_pdf)
+    pages, chars = snapshot.page_count, snapshot.extracted_char_count
     assert pages == 2
     assert chars > 20
 

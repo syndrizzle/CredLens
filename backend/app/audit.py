@@ -7,39 +7,9 @@ from sqlalchemy import select
 from sqlalchemy.engine import Connection
 
 from app.models import audit_events
-from app.schemas import AuditEventSummary
+from app.schemas.audit import AUDIT_RESOURCES, AuditEventSummary
 
-AUDIT_ACTIONS = frozenset(
-    {
-        "account_registered",
-        "session_login",
-        "session_logout",
-        "workspace_created",
-        "workspace_updated",
-        "workspace_deleted",
-        "analysis_run_created",
-        "document_uploaded",
-        "document_retried",
-        "document_extracted",
-        "document_deleted",
-        "report_generated",
-        "qa_asked",
-    }
-)
-
-AUDIT_RESOURCE_TYPES = frozenset(
-    {
-        "account",
-        "session",
-        "workspace",
-        "analysis_run",
-        "document",
-        "report",
-        "qa",
-    }
-)
-
-# Explicit allowlist so financial figures, raw amounts, PDF text, credentials, or Q&A text can never enter audit logs.
+# Callers supply operational metadata only. Reject any additional detail keys.
 ALLOWED_AUDIT_DETAIL_KEYS = frozenset(
     {
         "input_revision",
@@ -78,16 +48,14 @@ def record_audit_event(
     connection: Connection,
     owner_id: UUID,
     action: str,
-    resource_type: str,
     *,
     resource_id: UUID | None = None,
     business_id: UUID | None = None,
     details: Mapping[str, object] | None = None,
-) -> UUID:
-    if action not in AUDIT_ACTIONS:
+) -> None:
+    resource_type = AUDIT_RESOURCES.get(action)
+    if resource_type is None:
         raise ValueError(f"Unsupported audit action: {action}")
-    if resource_type not in AUDIT_RESOURCE_TYPES:
-        raise ValueError(f"Unsupported audit resource type: {resource_type}")
     safe_details = sanitize_audit_details(details)
     event_id = uuid4()
     connection.execute(
@@ -101,7 +69,6 @@ def record_audit_event(
             details=safe_details,
         )
     )
-    return event_id
 
 
 def list_audit_events(

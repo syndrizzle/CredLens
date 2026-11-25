@@ -7,8 +7,8 @@ from unittest.mock import Mock
 
 import pytest
 
-from app import document_ingress, documents, pdf_limits, pdf_worker
-from pdf_helpers import build_minimal_pdf
+from app import document_ingress, documents, pdf_limits, pdf_processing, pdf_worker
+from pdf_helpers import build_minimal_pdf, inspect_pdf_bytes
 
 
 def test_page_iteration_stops_before_page_51(tmp_path, monkeypatch):
@@ -34,8 +34,8 @@ def test_compressed_stream_is_bounded():
     compressed = zlib.compress(b" " * (32 * 1024 * 1024) + data[start:end])
     # pdfminer reconstructs cross-references after the stream length changes.
     data = data[:start].replace(b"/Length ", b"/Filter /FlateDecode /Length ") + compressed + data[end:]
-    with pytest.raises(documents.DocumentRejectError) as exc:
-        documents.inspect_pdf_bytes(data)
+    with pytest.raises(pdf_processing.DocumentRejectError) as exc:
+        inspect_pdf_bytes(data)
     assert exc.value.code == "parser_resource_limit"
 
 
@@ -45,14 +45,14 @@ def test_timeout_kills_child_and_reports_failure(tmp_path, monkeypatch):
     def run(*args, **kwargs):
         nonlocal child
         script = "import os,time;open('child.pid','w').write(str(os.getpid()));time.sleep(60)"
-        kwargs.update(timeout=0.25, cwd=tmp_path)
+        kwargs.update(timeout=2, cwd=tmp_path)
         try:
             return original([sys.executable, "-c", script], **kwargs)
         finally:
             child = int((tmp_path / "child.pid").read_text())
-    monkeypatch.setattr(documents.subprocess, "run", run)
-    with pytest.raises(documents.DocumentRejectError) as exc:
-        documents.inspect_pdf_file(tmp_path / "input.pdf")
+    monkeypatch.setattr(pdf_processing.subprocess, "run", run)
+    with pytest.raises(pdf_processing.DocumentRejectError) as exc:
+        pdf_processing.inspect_pdf_file(tmp_path / "input.pdf")
     assert exc.value.code == "parser_timeout"
     if os.name != "nt":
         with pytest.raises(ProcessLookupError):

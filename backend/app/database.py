@@ -1,22 +1,17 @@
-import os
 from functools import lru_cache
-from pathlib import Path
 
-from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.exc import ArgumentError
 from sqlalchemy.pool import NullPool
 
+from app.settings import setting
+
 
 @lru_cache
 def get_engine(*, direct: bool = False) -> Engine:
-    root = Path(__file__).resolve().parents[2]
-    load_dotenv(
-        root / (".env" if (root / ".env").exists() else ".env.local"), override=False
-    )
     variable = "DATABASE_URL_UNPOOLED" if direct else "DATABASE_URL"
-    raw = os.environ.get(variable)
+    raw = setting(variable)
     if not raw:
         raise RuntimeError(f"{variable} is not configured")
     try:

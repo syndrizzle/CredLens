@@ -5,17 +5,21 @@ import json
 from uuid import UUID
 
 from sqlalchemy import select
-from sqlalchemy.engine import Connection
+from sqlalchemy.engine import Connection, RowMapping
 
+from app.analysis_runs import RUN_ORDER, RunHistory, load_run_history, load_run_payload, parse_analysis
 from app.audit import record_audit_event
-from app.models import analysis_runs
-from app.persistence import owned_business, save_analysis
-from app.schemas import (
+from app.models import analysis_runs, documents
+from app.persistence import save_analysis
+from app.workspace_access import document_scope, owned_business
+from app.schemas.financial import (
     AnalysisRequest,
     AnalysisResponse,
     EvidenceState,
     FinancialField,
     Indicator,
+)
+from app.schemas.reports import (
     PreparationReportResponse,
     ReportDocumentReference,
     ReportMissingEvidenceItem,
@@ -39,7 +43,6 @@ STATE_ORDER: dict[EvidenceState, int] = {
 def build_missing_evidence(
     analysis: AnalysisResponse,
 ) -> list[ReportMissingEvidenceItem]:
-    """Group non-supported evidence gaps with the exact analyses each item blocks."""
     grouped: dict[
         tuple[int, str, tuple[FinancialField, ...], str],
         tuple[EvidenceState, list[Indicator | str]],
@@ -93,8 +96,8 @@ def build_missing_evidence(
 
 def build_documents_referenced(
     inputs: AnalysisRequest,
+    available: set[UUID] | None = None,
 ) -> list[ReportDocumentReference]:
-    """Summarize source PDF documents and pages cited by document-origin figures."""
     refs: dict[tuple[UUID | None, str], set[int]] = {}
     for period in inputs.periods:
         for figure in period.values.values():
@@ -107,7 +110,7 @@ def build_documents_referenced(
             document_id=doc_id,
             filename=filename,
             pages=sorted(pages),
-            detached=doc_id is None,
+            detached=doc_id is None or (available is not None and doc_id not in available),
         )
         for (doc_id, filename), pages in refs.items()
     ]
@@ -157,8 +160,8 @@ def assemble_preparation_report(
     created_at: datetime,
     inputs: AnalysisRequest,
     analysis: AnalysisResponse,
+    available_documents: set[UUID] | None = None,
 ) -> PreparationReportResponse:
-    """Assemble a validated PreparationReportResponse from immutable run snapshots."""
     limitations = [*analysis.limitations]
     if REPORT_LIMITATION not in limitations:
         limitations.append(REPORT_LIMITATION)
@@ -179,139 +182,78 @@ def assemble_preparation_report(
         inputs=inputs,
         analysis=analysis,
         missing_evidence=build_missing_evidence(analysis),
-        documents_referenced=build_documents_referenced(inputs),
+        documents_referenced=build_documents_referenced(inputs, available_documents),
         limitations=limitations,
     )
 
 
-def _load_runs_consistent(
-    connection: Connection,
-    owner_id: UUID,
-    business_id: UUID,
-    *,
-    include_payloads: bool = True,
-) -> tuple[int, list[dict]]:
-    cols = [
-        analysis_runs.c.id,
-        analysis_runs.c.business_id,
-        analysis_runs.c.input_revision,
-        analysis_runs.c.rule_version,
-        analysis_runs.c.created_at,
-    ]
-    if include_payloads:
-        cols.extend([analysis_runs.c.inputs, analysis_runs.c.results])
-    else:
-        cols.append(
-            analysis_runs.c.results["action_version"].astext.label("action_version")
-        )
-    while True:
-        business = owned_business(connection, owner_id, business_id)
-        current_rev = business["input_revision"]
-        rows = (
-            connection.execute(
-                select(*cols)
-                .where(analysis_runs.c.business_id == business_id)
-                .order_by(analysis_runs.c.created_at.asc(), analysis_runs.c.id.asc())
-            )
-            .mappings()
-            .all()
-        )
-        after = owned_business(connection, owner_id, business_id)
-        if after["input_revision"] == current_rev and all(
-            row["input_revision"] <= current_rev for row in rows
-        ):
-            return current_rev, [dict(row) for row in rows]
-
-
-def _index_runs(
-    rows: list[dict],
-) -> tuple[dict[UUID, int], dict | None]:
-    # Rows arrive chronologically ascending (created_at, id) for stable 1-based version numbering.
-    version_map = {row["id"]: idx for idx, row in enumerate(rows, start=1)}
-    latest = (
-        max(
-            rows,
-            key=lambda row: (row["input_revision"], row["created_at"], str(row["id"])),
-        )
-        if rows
-        else None
+def _report_summary(history: RunHistory, row: RowMapping, versions: dict[UUID, int]) -> ReportSummary:
+    latest = history.runs[0]
+    superseded, reason = _superseded_info(
+        row["id"], row["input_revision"], history.revision,
+        latest["id"], latest["input_revision"], versions,
     )
-    return version_map, latest
+    return ReportSummary(
+        report_id=row["id"],
+        business_id=row["business_id"],
+        report_version=versions[row["id"]],
+        input_revision=row["input_revision"],
+        current_input_revision=history.revision,
+        rule_version=row["rule_version"],
+        action_version=row["action_version"],
+        superseded=superseded,
+        superseded_reason=reason,
+        created_at=row["created_at"],
+    )
+
+
+def _report_versions(history: RunHistory) -> dict[UUID, int]:
+    chronological = sorted(history.runs, key=lambda row: (row["created_at"], row["id"]))
+    return {row["id"]: index for index, row in enumerate(chronological, 1)}
 
 
 def list_reports(
     connection: Connection, owner_id: UUID, business_id: UUID
 ) -> list[ReportSummary]:
-    current_rev, rows = _load_runs_consistent(
-        connection, owner_id, business_id, include_payloads=False
-    )
-    version_map, latest = _index_runs(rows)
-    latest_id = latest["id"] if latest is not None else None
-    latest_rev = latest["input_revision"] if latest is not None else None
-
-    ordered = sorted(
-        rows,
-        key=lambda row: (row["input_revision"], row["created_at"], str(row["id"])),
-        reverse=True,
-    )
-    summaries: list[ReportSummary] = []
-    for row in ordered:
-        superseded, reason = _superseded_info(
-            row["id"],
-            row["input_revision"],
-            current_rev,
-            latest_id,
-            latest_rev,
-            version_map,
-        )
-        summaries.append(
-            ReportSummary(
-                report_id=row["id"],
-                business_id=row["business_id"],
-                report_version=version_map[row["id"]],
-                input_revision=row["input_revision"],
-                current_input_revision=current_rev,
-                rule_version=row["rule_version"],
-                action_version=row["action_version"],
-                superseded=superseded,
-                superseded_reason=reason,
-                created_at=row["created_at"],
-            )
-        )
-    return summaries
+    history = load_run_history(connection, owner_id, business_id)
+    versions = _report_versions(history)
+    return [_report_summary(history, row, versions) for row in history.runs]
 
 
 def load_report(
     connection: Connection, owner_id: UUID, business_id: UUID, report_id: UUID
 ) -> PreparationReportResponse:
-    current_rev, rows = _load_runs_consistent(connection, owner_id, business_id)
-    target = next((row for row in rows if row["id"] == report_id), None)
+    history = load_run_history(connection, owner_id, business_id)
+    target = next((row for row in history.runs if row["id"] == report_id), None)
     if target is None:
         raise LookupError("Report not found")
-    version_map, latest = _index_runs(rows)
-    latest_id = latest["id"] if latest is not None else None
-    latest_rev = latest["input_revision"] if latest is not None else None
-    superseded, reason = _superseded_info(
-        target["id"],
-        target["input_revision"],
-        current_rev,
-        latest_id,
-        latest_rev,
-        version_map,
-    )
-    inputs = AnalysisRequest.model_validate_json(json.dumps(target["inputs"]))
-    analysis = AnalysisResponse.model_validate_json(json.dumps(target["results"]))
+    summary = _report_summary(history, target, _report_versions(history))
+    payload = load_run_payload(connection, owner_id, business_id, report_id, include_inputs=True)
+    inputs = AnalysisRequest.model_validate_json(json.dumps(payload["inputs"]))
+    analysis = parse_analysis(payload["results"])
+    source_ids = {
+        figure.source.document_id for period in inputs.periods for figure in period.values.values()
+        if figure.source is not None and figure.source.document_id is not None
+    }
+    available_documents = set(connection.scalars(
+        select(documents.c.id).where(
+            *document_scope(owner_id, business_id),
+            documents.c.id.in_(source_ids),
+            documents.c.status == "ready",
+        )
+    )) if source_ids else set()
     return assemble_preparation_report(
-        report_id=target["id"],
-        business_id=target["business_id"],
-        report_version=version_map[target["id"]],
-        input_revision=target["input_revision"],
-        current_input_revision=current_rev,
-        superseded=superseded,
-        superseded_reason=reason,
-        created_at=target["created_at"],
+        report_id=summary.report_id,
+        business_id=summary.business_id,
+        report_version=summary.report_version,
+        input_revision=summary.input_revision,
+        current_input_revision=summary.current_input_revision,
+        superseded=summary.superseded,
+        superseded_reason=summary.superseded_reason,
+        created_at=summary.created_at,
         inputs=inputs,
         analysis=analysis,
+        available_documents=available_documents,
     )
 
 
@@ -326,7 +268,7 @@ def generate_report(
             analysis_runs.c.business_id == business_id,
             analysis_runs.c.input_revision == locked["input_revision"],
         )
-        .order_by(analysis_runs.c.created_at.desc(), analysis_runs.c.id.desc())
+        .order_by(*RUN_ORDER)
         .limit(1)
     ).scalar_one_or_none()
     run_id = (
@@ -339,7 +281,6 @@ def generate_report(
         connection,
         owner_id,
         "report_generated",
-        "report",
         resource_id=report.report_id,
         business_id=business_id,
         details={

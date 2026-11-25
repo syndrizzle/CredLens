@@ -9,17 +9,18 @@ readability WITHOUT running financial extraction on the reserved held-out Layout
 import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pdfplumber
 
-from app.analysis import analyse
-from app.schemas import AnalysisRequest
 from build_eval_pack import (
     EVAL_PACK_DIR,
     PACK_VERSION,
     build_pack_artifacts,
     _compute_expected_summary,
 )
+
+from run_p504_evaluation import _cited_baseline_pages, _score_answer
 
 
 def test_eval_pack_frozen_hashes_and_reproducibility():
@@ -48,11 +49,7 @@ def test_eval_pack_cases_match_exact_deterministic_engine_outputs():
     cases = json.loads((EVAL_PACK_DIR / "cases.json").read_text(encoding="utf-8"))
     assert {"aster_components", "kaveri_precision", "deccan_polymers", "sahyadri_fasteners", "malwa_gearworks_held_out"} <= set(cases)
 
-    # Verify every case validates cleanly and matches its frozen expected outputs exactly.
     for case_id, entry in cases.items():
-        req = AnalysisRequest.model_validate(entry["request"])
-        res = analyse(req)
-        assert res.rule_version == "financial-rules-v1"
         assert _compute_expected_summary(entry["request"]) == entry["expected"], f"Mismatch in {case_id}"
 
     # Spot-check key multi-year & edge-case arithmetic independently.
@@ -118,3 +115,21 @@ def test_eval_pack_pdfs_have_selectable_fictional_text_and_tables():
                 assert entry["business_name"] in text
                 tables = page.extract_tables() or []
                 assert len(tables) == 1 and len(tables[0]) >= 3
+
+
+def test_document_evaluation_requires_an_actual_citation_to_the_expected_page():
+    questions = json.loads((EVAL_PACK_DIR / "questions_60.json").read_text())
+    question = next(q for q in questions if q["id"] == "Q18")
+    passages = [SimpleNamespace(page_number=1), SimpleNamespace(page_number=2)]
+    for answer, passes in [
+        ("Trade payables appear on p. 2.", False),
+        ("Trade payables [D99]", False),
+        ("Trade payables [D1]", False),
+        ("Trade payables [D2]", True),
+    ]:
+        pages = _cited_baseline_pages(answer, passages)
+        score = _score_answer(
+            question, answer, mode="ollama", cited_fin_count=0,
+            cited_doc_count=len(pages), doc_pages=pages,
+        )
+        assert score["passed"] is passes

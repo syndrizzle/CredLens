@@ -3,6 +3,7 @@ import hashlib
 import json
 import logging
 import sys
+from typing import TYPE_CHECKING
 
 from app.pdf_limits import (
     MAX_DECODED_BYTES,
@@ -22,26 +23,18 @@ class Rejected(Exception):
     pass
 
 
-class PdfInspectionResult(tuple):
-    pages: int
-    chars: int
-    extraction: dict
-
-    def __new__(cls, pages: int, chars: int, extraction: dict):
-        obj = super().__new__(cls, (pages, chars))
-        obj.pages = pages
-        obj.chars = chars
-        obj.extraction = extraction
-        return obj
+if TYPE_CHECKING:
+    from app.schemas.documents import DocumentExtractionSnapshot
 
 
-def inspect(path: str) -> PdfInspectionResult:
+def inspect(path: str) -> "DocumentExtractionSnapshot":
     import pdfplumber
     from pdfminer.pdfpage import PDFPage
     from pdfminer.pdftypes import resolve1
     from pdfplumber.page import Page
 
     from app.pdf_extraction import ExtractionLimitExceeded, build_extraction_snapshot
+    from app.pdf_format import RawTable
 
     digest = hashlib.sha256()
     total_bytes = 0
@@ -58,8 +51,7 @@ def inspect(path: str) -> PdfInspectionResult:
         if pdf.doc.encryption is not None:
             raise Rejected("encrypted_pdf")
         pages = chars = decoded_bytes = total_text_len = 0
-        raw_pages: list[tuple[int, str, list[list[list[str | None]]]]] = []
-        table_contexts = {}
+        raw_pages: list[tuple[int, str, list[RawTable]]] = []
         for number, raw_page in enumerate(PDFPage.create_pages(pdf.doc), 1):
             if number > MAX_PDF_PAGES:
                 raise Rejected("too_many_pages")
@@ -82,7 +74,7 @@ def inspect(path: str) -> PdfInspectionResult:
                 found = sorted(page.find_tables(), key=lambda table: table.bbox[1])
                 if len(found) > MAX_TABLES_PER_PAGE:
                     raise Rejected("parser_resource_limit")
-                tables = [table.extract() for table in found]
+                tables = []
                 # Only vertically separated tables have unambiguous heading bands.
                 previous_bottom = page.bbox[1]
                 for index, table in enumerate(found, 1):
@@ -94,7 +86,7 @@ def inspect(path: str) -> PdfInspectionResult:
                         heading = page.within_bbox((left, previous_bottom, right, top)).extract_text()
                         if len(found) == 1 and bottom < page.bbox[3]:
                             footer = page.within_bbox((left, bottom, right, page.bbox[3])).extract_text()
-                    table_contexts[number, index] = heading, footer
+                    tables.append(RawTable(table.extract(), heading, footer))
                     previous_bottom = max(previous_bottom, bottom)
                 raw_pages.append((number, page_text, tables))
             finally:
@@ -105,10 +97,10 @@ def inspect(path: str) -> PdfInspectionResult:
         if not chars:
             raise Rejected("scanned_only_pdf")
         try:
-            snapshot = build_extraction_snapshot(document_sha256, chars, raw_pages, table_contexts=table_contexts)
+            snapshot = build_extraction_snapshot(document_sha256, chars, raw_pages)
         except ExtractionLimitExceeded:
             raise Rejected("parser_resource_limit") from None
-        return PdfInspectionResult(pages, chars, snapshot.model_dump(mode="json"))
+        return snapshot
     finally:
         # PDF.close() eagerly reconstructs pdf.pages, bypassing the bounded page iterator.
         pdf.stream.close()
@@ -122,12 +114,7 @@ def main() -> None:
         print(json.dumps({"error": "parser_limits_unavailable"}))
         return
     try:
-        inspected = inspect(sys.argv[1])
-        result: dict = {
-            "pages": inspected.pages,
-            "chars": inspected.chars,
-            "extraction": inspected.extraction,
-        }
+        result = {"extraction": inspect(sys.argv[1]).model_dump(mode="json")}
     except Rejected as exc:
         result = {"error": str(exc)}
     except MemoryError:

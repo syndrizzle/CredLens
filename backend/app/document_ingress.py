@@ -5,12 +5,15 @@ from sqlalchemy.exc import SQLAlchemyError
 from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import JSONResponse
+from starlette.routing import compile_path
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.auth import SESSION_COOKIE, resolve_session
 from app.database import get_engine
 from app.pdf_limits import MAX_PDF_BYTES
 
+DOCUMENT_UPLOAD_PATH = "/api/businesses/{business_id}/documents"
+_UPLOAD_PATH = compile_path(DOCUMENT_UPLOAD_PATH)[0]
 MAX_UPLOAD_REQUEST_BYTES = MAX_PDF_BYTES + 64 * 1024
 
 
@@ -26,8 +29,11 @@ class DocumentUploadGuard:
         self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        parts = scope.get("path", "").strip("/").split("/")
-        if scope["type"] != "http" or scope.get("method") != "POST" or len(parts) != 4 or parts[:2] != ["api", "businesses"] or parts[3] != "documents":
+        if (
+            scope["type"] != "http"
+            or scope.get("method") != "POST"
+            or not _UPLOAD_PATH.fullmatch(scope.get("path", "").rstrip("/"))
+        ):
             await self.app(scope, receive, send)
             return
         request = Request(scope)

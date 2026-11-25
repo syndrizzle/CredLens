@@ -5,12 +5,13 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from pydantic import ValidationError
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
 from app.auth import SESSION_COOKIE
 from app.database import get_engine
-from app.documents import inspect_pdf_file
+from app.pdf_processing import inspect_pdf_file
 from app.main import app
 from app.models import businesses, document_chunks, documents, owners
 from app.retrieval import (
@@ -25,7 +26,8 @@ from app.retrieval import (
     get_embedding_model,
     prepare_embedded_chunks,
 )
-from app.schemas import DocumentExtractionSnapshot, ExtractedPage, RetrievalRequest
+from app.schemas.documents import DocumentExtractionSnapshot, ExtractedPage
+from app.schemas.evidence import RetrievalRequest
 from pdf_helpers import build_minimal_pdf
 
 
@@ -33,8 +35,7 @@ def test_aster_reference_chunking_respects_minilm_token_limit_and_page_period_me
     aster_pdf = (
         Path(__file__).resolve().parent / "fixtures" / "pdf_corpus" / "aster-reference.pdf"
     ).resolve()
-    inspected = inspect_pdf_file(aster_pdf)
-    snapshot = DocumentExtractionSnapshot.model_validate(inspected.extraction)
+    snapshot = inspect_pdf_file(aster_pdf)
     model = get_embedding_model()
 
     embedded = prepare_embedded_chunks(snapshot, "aster-reference.pdf", model=model)
@@ -48,7 +49,7 @@ def test_aster_reference_chunking_respects_minilm_token_limit_and_page_period_me
         assert chunk.period_years == [2023, 2024]
         assert chunk.section is not None and len(chunk.section) > 0
         # Re-verify against the actual WordPiece tokenizer including [CLS]/[SEP].
-        actual_tokens = count_model_tokens(chunk.content, model=model)
+        actual_tokens = len(model.tokenizer.encode(chunk.content, add_special_tokens=True, truncation=False))
         assert actual_tokens == chunk.token_count
         assert 1 <= actual_tokens <= CHUNK_TARGET_TOKENS <= MODEL_MAX_TOKENS
         assert len(item.embedding) == EMBEDDING_DIM
@@ -150,7 +151,7 @@ def test_retrieval_request_schema_enforces_bounds():
         {"query": "ok", "document_id": "not-a-uuid"},
         {"query": "ok", "extra": True},
     ):
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             RetrievalRequest.model_validate(bad)
 
 

@@ -5,42 +5,40 @@ Runs strictly locally using:
 - Offline CPU sentence-transformers/all-MiniLM-L6-v2 (384d, <=220 tokens, top_k=6)
 - Local loopback Ollama (qwen3:4b-instruct, num_ctx=4096, temperature=0, seed=42)
 
-Writes full machine-readable metrics to docs/eval_p504_results.json.
+Writes machine-readable metrics to the requested output file.
 """
 
 from __future__ import annotations
 
+import argparse
+from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
 import json
 import os
 from pathlib import Path
 import re
-import resource
 import statistics
 import subprocess
 import sys
 import time
-from uuid import uuid4
+from uuid import UUID, uuid4
+
+if sys.platform != "win32":
+    import resource
 
 TESTS_DIR = Path(__file__).resolve().parent
 BACKEND_DIR = TESTS_DIR.parent
-REPO_DIR = BACKEND_DIR.parent
 for p in (str(TESTS_DIR), str(BACKEND_DIR)):
     if p not in sys.path:
         sys.path.insert(0, p)
 
-os.environ.setdefault("HF_HUB_OFFLINE", "1")
-os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
-os.environ.setdefault("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
-os.environ.setdefault("OLLAMA_MODEL", "qwen3:4b-instruct")
-
-from app.analysis import MULTIPLIERS, analyse
-from app.documents import inspect_pdf_file
+from app.analysis import analyse
+from app.pdf_processing import inspect_pdf_file
+from app.ollama import call_local_ollama
 from app.qa import (
     QAContext,
     _violates_output_guardrails,
     answer_workspace_question,
-    call_local_ollama,
 )
 from app.retrieval import (
     EMBEDDING_MODEL_ID,
@@ -49,15 +47,10 @@ from app.retrieval import (
     get_embedding_model,
     prepare_embedded_chunks,
 )
-from app.schemas import (
-    AnalysisRequest,
-    DocumentExtractionSnapshot,
-    RetrievedPassage,
-    WorkspaceResponse,
-)
+from app.schemas.evidence import RetrievedPassage
+from app.schemas.financial import AnalysisRequest, UNIT_MULTIPLIERS
 
 EVAL_PACK_DIR = TESTS_DIR / "fixtures" / "eval_pack"
-OUTPUT_JSON = REPO_DIR / "docs" / "eval_p504_results.json"
 
 VARIANT_A_SYSTEM = (
     "You are a helpful financial assistant for small businesses. "
@@ -92,7 +85,7 @@ def _naive_calculations_block(req: AnalysisRequest) -> str:
     by_year = {p.year_start: p for p in periods}
     lines = [f"Business: {req.business_name} (Naive Python Calculations)"]
     for p in periods:
-        mult = Decimal(MULTIPLIERS[p.unit])
+        mult = Decimal(UNIT_MULTIPLIERS[p.unit])
 
         def val(field: str) -> Decimal | None:
             fig = p.values.get(field)
@@ -119,7 +112,7 @@ def _naive_calculations_block(req: AnalysisRequest) -> str:
             prev_p = earlier[-1]
             prev_fig = prev_p.values.get("revenue")
             if prev_fig is not None and prev_fig.amount is not None:
-                prev_rev = prev_fig.amount * Decimal(MULTIPLIERS[prev_p.unit])
+                prev_rev = prev_fig.amount * Decimal(UNIT_MULTIPLIERS[prev_p.unit])
                 if prev_rev != 0:
                     lines.append(f"  Revenue growth: {_round2(Decimal(100) * (rev - prev_rev) / prev_rev)}%")
         if pat is not None and rev is not None:
@@ -158,7 +151,7 @@ def _evaluate_pdf_extraction(manifest: dict, cases: dict) -> dict:
         t0 = time.perf_counter()
         inspected = inspect_pdf_file(pdf_path)
         elapsed_ms = round((time.perf_counter() - t0) * 1000, 1)
-        snap = DocumentExtractionSnapshot.model_validate(inspected.extraction)
+        snap = inspected
 
         usable = [c for c in snap.candidates if not c.issues and c.normalized_inr is not None]
         unresolved = [c for c in snap.candidates if c.issues or c.normalized_inr is None]
@@ -182,7 +175,7 @@ def _evaluate_pdf_extraction(manifest: dict, cases: dict) -> dict:
                 "case_id": entry["case_id"],
                 "split": entry["split"],
                 "layout": entry["layout"],
-                "pages": inspected.pages,
+                "pages": inspected.page_count,
                 "elapsed_ms": elapsed_ms,
                 "expected_fields": len(expected),
                 "extracted_usable": len(usable),
@@ -205,6 +198,13 @@ def _normalize_for_match(text: str) -> str:
     # Remove commas inside digits (e.g., 2,000,000.00 -> 2000000.00) so formatting matches fairly across A/B/C.
     collapsed = re.sub(r"(?<=\d),(?=\d)", "", text)
     return re.sub(r"\s+", " ", collapsed).lower()
+
+
+def _cited_baseline_pages(answer: str, passages: list[RetrievedPassage]) -> list[int]:
+    return [
+        passage.page_number for idx, passage in enumerate(passages, 1)
+        if f"[D{idx}]" in answer
+    ]
 
 
 def _score_answer(
@@ -231,22 +231,13 @@ def _score_answer(
         if any(pat.search(answer) for pat in FALSE_REFUSAL_PATTERNS):
             false_refusal = True
 
+    expected_page_hit = q["expected_page"] in doc_pages if q.get("expected_page") is not None else None
     passed = (
         len(missing_expected) == 0
         and len(found_forbidden) == 0
         and not guardrail_violation
         and not false_refusal
-    )
-    has_inline_cit = bool(re.search(r"\[[FD][1-9][0-9]*\]", answer))
-    if cited_fin_count + cited_doc_count > 0:
-        citation_supported = True
-    else:
-        citation_supported = has_inline_cit or (
-            q.get("expected_page") is not None and f"p. {q['expected_page']}" in norm
-        )
-
-    expected_page_hit = (
-        q["expected_page"] in doc_pages if q.get("expected_page") is not None else None
+        and expected_page_hit is not False
     )
     return {
         "id": q["id"],
@@ -258,7 +249,7 @@ def _score_answer(
         "found_forbidden": found_forbidden,
         "guardrail_violation": guardrail_violation,
         "false_refusal": false_refusal,
-        "citation_supported": citation_supported,
+        "has_valid_citation": cited_fin_count + cited_doc_count > 0,
         "expected_page_hit": expected_page_hit,
         "answer_preview": answer[:220],
     }
@@ -276,6 +267,15 @@ def _gpu_vram_mb() -> int | None:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--output", required=True, type=Path)
+    output = parser.parse_args().output
+    if output.exists():
+        parser.error(f"Output already exists: {output}")
+    os.environ.setdefault("HF_HUB_OFFLINE", "1")
+    os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+    os.environ.setdefault("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
+    os.environ.setdefault("OLLAMA_MODEL", "qwen3:4b-instruct")
     manifest = json.loads((EVAL_PACK_DIR / "manifest.json").read_text(encoding="utf-8"))
     cases = json.loads((EVAL_PACK_DIR / "cases.json").read_text(encoding="utf-8"))
     questions = json.loads((EVAL_PACK_DIR / "questions_60.json").read_text(encoding="utf-8"))
@@ -290,14 +290,14 @@ def main() -> None:
 
     print("2. Indexing evaluation PDFs offline with all-MiniLM-L6-v2 (CPU)...")
     model = get_embedding_model()
-    pdf_indices: dict[str, tuple[str, list]] = {}
+    pdf_indices: dict[str, tuple[UUID, list]] = {}
     for entry in manifest["pdfs"]:
         if entry["split"] != "evaluation":
             continue
         pdf_path = (EVAL_PACK_DIR / entry["file"]).resolve()
-        snap = DocumentExtractionSnapshot.model_validate(inspect_pdf_file(pdf_path).extraction)
+        snap = inspect_pdf_file(pdf_path)
         embedded = prepare_embedded_chunks(snap, entry["file"], model=model)
-        pdf_indices[entry["file"]] = (str(uuid4()), embedded)
+        pdf_indices[entry["file"]] = (uuid4(), embedded)
 
     # Pre-embed adversarial Note 9 chunk for aster_prompt_injection
     adv_text = cases["aster_prompt_injection"]["extra_pdf_text"]
@@ -323,7 +323,7 @@ def main() -> None:
                 "no_documents",
                 "No processed PDF documents are available in this workspace; answers use saved financial figures only.",
             )
-        doc_id_str, embedded = pdf_indices[pdf_file]
+        doc_id, embedded = pdf_indices[pdf_file]
         q_vec = embed_texts([query], model=model)[0]
         scored: list[tuple[float, RetrievedPassage]] = []
         for item in embedded:
@@ -335,7 +335,7 @@ def main() -> None:
                     score,
                     RetrievedPassage(
                         chunk_id=uuid4(),
-                        document_id=uuid4() if False else item.chunk.chunk_index and uuid4() or uuid4(),
+                        document_id=doc_id,
                         filename=pdf_file,
                         chunk_index=item.chunk.chunk_index,
                         page_number=item.chunk.page_number,
@@ -362,7 +362,7 @@ def main() -> None:
     variant_results: dict[str, list[dict]] = {"A_basic_rag": [], "B_rag_plus_calc": [], "C_full_credlens": []}
     latencies: dict[str, list[float]] = {"A_basic_rag": [], "B_rag_plus_calc": [], "C_full_credlens": []}
 
-    print("3. Running 60-question A / B / C ablation (180 live local qwen3:4b-instruct evaluations)...")
+    print("3. Scoring 180 A/B/C responses across 60 questions with local Ollama...")
     for idx, q in enumerate(questions, start=1):
         case_entry = cases[q["case_id"]]
         req = AnalysisRequest.model_validate(case_entry["request"])
@@ -381,10 +381,11 @@ def main() -> None:
         )
         lat_a = (time.perf_counter() - t0) * 1000
         latencies["A_basic_rag"].append(lat_a)
+        pages_a = _cited_baseline_pages(ans_a, passages)
         variant_results["A_basic_rag"].append(
             _score_answer(
-                q, ans_a, mode="ollama", cited_fin_count=0, cited_doc_count=0,
-                doc_pages=[p.page_number for p in passages],
+                q, ans_a, mode="ollama", cited_fin_count=0, cited_doc_count=len(pages_a),
+                doc_pages=pages_a,
             )
         )
 
@@ -397,26 +398,19 @@ def main() -> None:
         )
         lat_b = (time.perf_counter() - t0) * 1000
         latencies["B_rag_plus_calc"].append(lat_b)
+        pages_b = _cited_baseline_pages(ans_b, passages)
         variant_results["B_rag_plus_calc"].append(
             _score_answer(
-                q, ans_b, mode="ollama", cited_fin_count=0, cited_doc_count=0,
-                doc_pages=[p.page_number for p in passages],
+                q, ans_b, mode="ollama", cited_fin_count=0, cited_doc_count=len(pages_b),
+                doc_pages=pages_b,
             )
         )
 
         # --- Variant C: Full CredLens ---
         analysis = analyse(req)
-        ws = WorkspaceResponse(
-            business_id=uuid4(),
-            input_revision=1,
-            request=req,
-            latest_run_id=uuid4(),
-            latest_analysis=analysis,
-            runs=[],
-            documents=[],
-        )
         ctx = QAContext(
-            workspace=ws,
+            business_name=req.business_name,
+            input_revision=1,
             analysis=analysis,
             passages=passages,
             retrieval_status=ret_status,
@@ -433,13 +427,16 @@ def main() -> None:
                 mode=resp_c.mode,
                 cited_fin_count=sum(1 for c in resp_c.financial_citations if c.cited),
                 cited_doc_count=sum(1 for c in resp_c.document_citations if c.cited),
-                doc_pages=[c.page_number for c in resp_c.document_citations],
+                doc_pages=[c.page_number for c in resp_c.document_citations if c.cited],
             )
         )
         if idx % 10 == 0:
             print(f"   Completed {idx}/60 questions...")
 
-    peak_rss_mb = round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0, 1)
+    peak_rss_mb = None
+    if sys.platform != "win32":
+        rss_unit = 1024 ** (2 if sys.platform == "darwin" else 1)
+        peak_rss_mb = round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / rss_unit, 1)
     vram_after = _gpu_vram_mb()
 
     def summarize(key: str) -> dict:
@@ -473,9 +470,12 @@ def main() -> None:
             "refusal_correct": sum(1 for r in refusal_rows if r["passed"]),
             "refusal_total": len(refusal_rows),
             "false_refusals": sum(1 for r in answerable_rows if r["false_refusal"]),
-            "citation_supported": sum(1 for r in rows if r["citation_supported"]),
+            "valid_citations": sum(r["has_valid_citation"] for r in rows),
+            "expected_page_cited": sum(r["expected_page_hit"] is True for r in rows),
+            "expected_page_total": sum(r["expected_page_hit"] is not None for r in rows),
             "ollama_mode_count": sum(1 for r in rows if r["mode"] == "ollama"),
             "fallback_mode_count": sum(1 for r in rows if r["mode"] == "fallback"),
+            "deterministic_mode_count": sum(1 for r in rows if r["mode"] == "deterministic"),
             "latency_ms": {
                 "mean": round(statistics.mean(lats), 1),
                 "median": round(statistics.median(lats), 1),
@@ -492,6 +492,7 @@ def main() -> None:
                     "found_forbidden": r["found_forbidden"],
                     "guardrail_violation": r["guardrail_violation"],
                     "false_refusal": r["false_refusal"],
+                    "expected_page_cited": r["expected_page_hit"],
                     "answer_preview": r["answer_preview"],
                 }
                 for r in rows
@@ -501,7 +502,7 @@ def main() -> None:
 
     summary = {
         "pack_version": manifest["pack_version"],
-        "run_date": "2026-11-21",
+        "run_date": date.today().isoformat(),
         "model": os.environ["OLLAMA_MODEL"],
         "embedding_model": EMBEDDING_MODEL_ID,
         "retrieval_top_k": 6,
@@ -515,16 +516,18 @@ def main() -> None:
             "C_full_credlens": summarize("C_full_credlens"),
         },
     }
-    OUTPUT_JSON.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+    with output.open("x", encoding="utf-8") as stream:
+        json.dump(summary, stream, indent=2)
+        stream.write("\n")
     print("\n=== P5-04 ABLATION SUMMARY ===")
     for name, s in summary["ablation"].items():
         print(
             f"{name}: {s['total_passed']}/60 ({s['useful_coverage_pct']}%) | "
             f"blocked={s['blocked_analyses_correct']}/24 | refusals={s['refusal_correct']}/12 | "
-            f"false_refusals={s['false_refusals']} | citations={s['citation_supported']}/60 | "
+            f"false_refusals={s['false_refusals']} | valid_citations={s['valid_citations']}/60 | "
             f"mean_lat={s['latency_ms']['mean']}ms"
         )
-    print(f"Wrote detailed metrics to {OUTPUT_JSON}")
+    print(f"Wrote detailed metrics to {output}")
 
 
 if __name__ == "__main__":

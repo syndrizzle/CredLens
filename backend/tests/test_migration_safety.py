@@ -22,10 +22,10 @@ class StoppedBeforeDDL(Exception):
 
 
 @pytest.fixture
-def fixture_engine(monkeypatch, request):
+def fixture_engine(monkeypatch, request, tmp_path):
     url = getattr(request, "param", TEST_URL)
     monkeypatch.setenv("PERSISTENCE_TEST_URL", url)
-    monkeypatch.setattr("app.database.load_dotenv", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("app.settings._ROOT", tmp_path)
     get_engine.cache_clear()
     engine = create_engine(make_url(url).set(drivername="postgresql+psycopg"))
     monkeypatch.setattr(

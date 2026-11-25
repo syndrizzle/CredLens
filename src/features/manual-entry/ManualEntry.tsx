@@ -124,8 +124,9 @@ function ManualEntry() {
   } | null>(null);
   const [workspaceBusy, setWorkspaceBusy] = useState(false);
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
-  const [activeReport, setActiveReport] =
+  const [reportResult, setActiveReport] =
     useState<PreparationReportResponse | null>(null);
+  const activeReport = reportResult?.business_id === activeWorkspace?.id ? reportResult : null;
   const [confirmDeleteWorkspace, setConfirmDeleteWorkspace] = useState(false);
   const [auditOpen, setAuditOpen] = useState(false);
   const [auditLoading, setAuditLoading] = useState(false);
@@ -1707,10 +1708,11 @@ function ManualEntry() {
             hasUnsavedChanges={!savedClean}
             disabled={workspaceBusy || analysis.loading}
             activeReport={activeReport}
+            documents={activeWorkspace.documents}
             onActiveReportChange={setActiveReport}
             onReportGenerated={(report) => {
               setActiveWorkspace((current) => {
-                if (!current || current.id !== report.business_id) return current;
+                if (current?.id !== report.business_id || current.revision !== report.input_revision) return current;
                 const alreadyTracked = current.runs.some(
                   (run) => run.run_id === report.report_id,
                 );

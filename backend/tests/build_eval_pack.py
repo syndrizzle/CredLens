@@ -902,7 +902,7 @@ def _build_requests_and_pdfs() -> tuple[dict[str, dict], list[dict]]:
 def _compute_expected_summary(request_dict: dict) -> dict:
     """Compute canonical expected indicator/balance outputs via deterministic Python engine."""
     from app.analysis import analyse
-    from app.schemas import AnalysisRequest
+    from app.schemas.financial import AnalysisRequest
 
     req = AnalysisRequest.model_validate(request_dict)
     res = analyse(req)

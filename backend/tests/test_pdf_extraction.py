@@ -5,11 +5,12 @@ from pathlib import Path
 import hashlib
 import json
 import os
-from functools import partial
 import pytest
 
-from app.documents import DocumentRejectError, inspect_pdf_bytes, inspect_pdf_file
+from app.pdf_processing import DocumentRejectError, inspect_pdf_file
+from pdf_helpers import inspect_pdf_bytes
 from app.pdf_extraction import ExtractionLimitExceeded, build_extraction_snapshot
+from app.pdf_format import RawTable
 from app.pdf_limits import (
     MAX_CANDIDATES,
     MAX_CELL_CHARS,
@@ -21,7 +22,7 @@ from app.pdf_limits import (
     MAX_TOTAL_TABLE_ROWS,
     MAX_TOTAL_TEXT_LENGTH,
 )
-from app.schemas import DocumentExtractionSnapshot
+from app.schemas.documents import DocumentExtractionSnapshot
 from build_pdf_corpus import CORPUS, render_document
 from pdf_helpers import build_minimal_pdf
 
@@ -33,8 +34,7 @@ HELD_OUT_DOCS = [d for d in MANIFEST["documents"] if d["split"] == "held_out"]
 def test_clean_aster_reference_matches_all_24_values_without_extra_candidates():
     reference = json.loads((Path(__file__).parent / "fixtures" / "aster_components.json").read_text())["request"]
     doc_entry = next(d for d in DEVELOPMENT_DOCS if d["file"] == "aster-reference.pdf")
-    result = inspect_pdf_file(CORPUS / doc_entry["file"])
-    snapshot = DocumentExtractionSnapshot.model_validate(result.extraction)
+    snapshot = inspect_pdf_file(CORPUS / doc_entry["file"])
 
     assert snapshot.schema_version == "document-extraction-v2"
     assert snapshot.document_sha256 == doc_entry["sha256"]
@@ -78,8 +78,7 @@ def test_held_out_exact_source_cells():
 
 def assert_corpus_candidates(document):
     path = CORPUS / document["file"]
-    result = inspect_pdf_file(path)
-    snapshot = result.extraction
+    snapshot = inspect_pdf_file(path).model_dump(mode="json")
 
     assert snapshot["document_sha256"] == document["sha256"]
     assert snapshot["layout"] == "layout_a"
@@ -134,8 +133,7 @@ def assert_corpus_candidates(document):
 def test_context_does_not_leak_across_pages_and_unsupported_layouts_fallback_safely():
     # Plain narrative PDF without tables remains readable with unsupported layout diagnostic.
     plain_pdf = build_minimal_pdf(["Standalone statement narrative without a ruled table."])
-    res = inspect_pdf_bytes(plain_pdf)
-    snap = DocumentExtractionSnapshot.model_validate(res.extraction)
+    snap = inspect_pdf_bytes(plain_pdf)
     assert snap.layout == "unsupported"
     assert snap.candidates == []
     assert snap.issues == ["unsupported_layout"]
@@ -176,7 +174,7 @@ def test_context_does_not_leak_across_pages_and_unsupported_layouts_fallback_saf
         ],
     }
     pdf_bytes = render_document(multi_page_doc)
-    multi_snap = DocumentExtractionSnapshot.model_validate(inspect_pdf_bytes(pdf_bytes).extraction)
+    multi_snap = inspect_pdf_bytes(pdf_bytes)
     p1_cands = [c for c in multi_snap.candidates if c.page_number == 1]
     p2_cands = [c for c in multi_snap.candidates if c.page_number == 2]
     assert len(p1_cands) == 2 and all(not c.issues and c.normalized_inr is not None for c in p1_cands)
@@ -188,10 +186,15 @@ def test_context_does_not_leak_across_pages_and_unsupported_layouts_fallback_saf
 
 def test_extraction_resource_bounds_reject_excessive_expansion(tmp_path, monkeypatch):
     import subprocess
-    from app import documents
+    from app import pdf_processing
     from app.pdf_limits import MAX_WORKER_STDOUT_BYTES
 
-    build = partial(build_extraction_snapshot, table_contexts={})
+    def build(sha, chars, pages, **kwargs):
+        return build_extraction_snapshot(
+            sha, chars,
+            [(number, text, [RawTable(table) for table in tables]) for number, text, tables in pages],
+            **kwargs,
+        )
     sha = hashlib.sha256(b"test").hexdigest()
 
     with pytest.raises(ExtractionLimitExceeded, match="Page text"):
@@ -263,7 +266,7 @@ def test_extraction_resource_bounds_reject_excessive_expansion(tmp_path, monkeyp
 
     # Oversized child stdout is rejected with 422 parser_resource_limit.
     monkeypatch.setattr(
-        documents.subprocess,
+        pdf_processing.subprocess,
         "run",
         lambda *_a, **_kw: subprocess.CompletedProcess(
             args=[], returncode=0, stdout=b"x" * (MAX_WORKER_STDOUT_BYTES + 1)
@@ -280,7 +283,7 @@ def test_extraction_resource_bounds_reject_excessive_expansion(tmp_path, monkeyp
         b'{"pages": 1, "chars": 10, "extraction": {"schema_version": "bad"}}',
     ):
         monkeypatch.setattr(
-            documents.subprocess,
+            pdf_processing.subprocess,
             "run",
             lambda *_a, _b=bad_payload, **_kw: subprocess.CompletedProcess(
                 args=[], returncode=0, stdout=_b
@@ -309,7 +312,7 @@ def test_source_context_belongs_to_each_table():
     first = _statement_table(650, "Standalone balance sheet", annual, "Amounts in INR rupees", "Total assets", "50")
     second = _statement_table(420, "Consolidated income statement", annual, "Amounts in INR lakhs", "Revenue from operations", "8")
     third = _statement_table(220, "Standalone profit and loss", annual, "Amounts in INR thousands", "Profit after tax", "9")
-    a, b, c = inspect_pdf_bytes(build_pdf([first + second + third])).extraction["candidates"]
+    a, b, c = inspect_pdf_bytes(build_pdf([first + second + third])).model_dump(mode="json")["candidates"]
     assert a["normalized_inr"] == "50" and a["table_index"] == 1
     assert b["issues"] == ["conflicting_basis"] and b["unit"] == "lakhs" and b["normalized_inr"] is None
     assert c["normalized_inr"] == "9000" and c["table_index"] == 3
@@ -326,7 +329,7 @@ def test_source_context_belongs_to_each_table():
 def test_unresolved_financial_meaning(period, unit, label, value, issue):
     from pdf_helpers import build_pdf
     table = _statement_table(600, "Standalone financial statement", period, unit, label, value)
-    candidate, = inspect_pdf_bytes(build_pdf([table])).extraction["candidates"]
+    candidate, = inspect_pdf_bytes(build_pdf([table])).model_dump(mode="json")["candidates"]
     assert issue in candidate["issues"] and candidate["normalized_inr"] is None
 
 
@@ -337,7 +340,7 @@ def test_explicit_inclusion_overrides_borrowing_exclusion_text():
                              "INR rupees", "Short-term borrowings", "800")
     foot = text(40, 150, "Borrowings exclude leases; short-term excludes current maturities.")
     foot += text(40, 120, "Includes leases and current maturities.")
-    candidate, = inspect_pdf_bytes(build_pdf([table + foot.encode()])).extraction["candidates"]
+    candidate, = inspect_pdf_bytes(build_pdf([table + foot.encode()])).model_dump(mode="json")["candidates"]
     assert candidate["issues"] == ["ambiguous_mapping"] and candidate["normalized_inr"] is None
 
 
@@ -346,7 +349,7 @@ def test_duplicate_year_leaves_other_period_usable():
     pages = [_statement_table(600, "Standalone profit and loss", f"Year ended 31 March {year}",
                              "Amounts in INR rupees", "Revenue from operations", value, f"31 Mar {year}")
              for year, value in [(2023, "3"), (2024, "4"), (2024, "5")]]
-    first, second, third = inspect_pdf_bytes(build_pdf(pages)).extraction["candidates"]
+    first, second, third = inspect_pdf_bytes(build_pdf(pages)).model_dump(mode="json")["candidates"]
     assert first["normalized_inr"] == "3" and first["issues"] == []
     assert all(c["issues"] == ["conflicting_match"] and c["normalized_inr"] is None for c in (second, third))
 
@@ -354,7 +357,7 @@ def test_duplicate_year_leaves_other_period_usable():
 def test_snapshot_requires_resolving_source_coordinates_and_cell():
     from pydantic import ValidationError
     import copy
-    snapshot = inspect_pdf_file(CORPUS / "aster-reference.pdf").extraction
+    snapshot = inspect_pdf_file(CORPUS / "aster-reference.pdf").model_dump(mode="json")
     for key, value in [("page_number", 50), ("table_index", 2), ("row_index", 1), ("row_index", 200),
                        ("column_index", 4), ("note", "99"), ("raw", "123"), ("source_row", ["incorrect"]),
                        ("label", "different label"), ("period_header", "different year")]:

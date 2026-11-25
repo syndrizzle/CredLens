@@ -17,8 +17,6 @@ import pytest
 from sqlalchemy import func, select
 
 from app.audit import (
-    AUDIT_ACTIONS,
-    AUDIT_RESOURCE_TYPES,
     record_audit_event,
     sanitize_audit_details,
 )
@@ -44,7 +42,9 @@ from app.models import (
     periods,
     revisions,
 )
-from app.schemas import AuditEventSummary, SessionResponse, WorkspaceDeleteResponse
+from app.schemas.audit import AuditEventSummary
+from app.schemas.auth import SessionResponse
+from app.schemas.workspaces import WorkspaceDeleteResponse
 
 
 def _aster_data() -> dict:
@@ -101,14 +101,8 @@ def test_audit_details_sanitizer_rejects_financial_and_sensitive_payloads():
         sanitize_audit_details({"status": {"nested": True}})
 
     with pytest.raises(ValueError, match="Unsupported audit action"):
-        record_audit_event(object(), uuid4(), "drop_table", "workspace")  # type: ignore[arg-type]
+        record_audit_event(object(), uuid4(), "drop_table")  # type: ignore[arg-type]
 
-    with pytest.raises(ValueError, match="Unsupported audit resource type"):
-        record_audit_event(object(), uuid4(), "workspace_deleted", "secret")  # type: ignore[arg-type]
-
-    assert "workspace_deleted" in AUDIT_ACTIONS
-    assert "report_generated" in AUDIT_ACTIONS
-    assert "workspace" in AUDIT_RESOURCE_TYPES
 
 
 def test_audit_migration_chain_and_offline_ddl():
@@ -348,6 +342,7 @@ def test_phase5_final_negative_access_matrix_offline(monkeypatch):
 def test_live_workspace_deletion_audit_and_backup_limits(monkeypatch):
     """End-to-end live verification of workspace deletion, cascade cleanup, and minimal audit log."""
     import shutil
+    import app.documents as document_module
 
     monkeypatch.setenv("DATABASE_URL", os.environ["PERSISTENCE_TEST_URL"])
     monkeypatch.setenv("OLLAMA_DISABLED", "1")
@@ -395,7 +390,20 @@ def test_live_workspace_deletion_audit_and_backup_limits(monkeypatch):
         )
         assert doc_path.is_file()
 
-        assert alice.post(f"/api/businesses/{biz_a}/reports").status_code == 200
+        documents_path = f"/api/businesses/{biz_a}/documents/{doc['id']}"
+        extraction = alice.get(f"{documents_path}/extraction").json()["extraction"]
+        revenue = next(c for c in extraction["candidates"] if c["field"] == "revenue" and c["year_start"] == 2024)
+        inputs = _aster_data()
+        inputs["periods"][1]["values"]["revenue"] = {
+            "raw": revenue["amount"], "reviewed": True, "origin": "document",
+            "source": {
+                **{key: revenue[key] for key in ("page_number", "table_index", "row_index", "column_index", "label")},
+                "document_id": doc["id"], "filename": doc["filename"], "raw_token": revenue["raw"],
+            },
+        }
+        assert alice.put(f"/api/businesses/{biz_a}", json={**inputs, "expected_revision": 1}).status_code == 200
+        report = alice.post(f"/api/businesses/{biz_a}/reports")
+        assert report.status_code == 200 and report.json()["documents_referenced"][0]["detached"] is False
         assert alice.post(f"/api/businesses/{biz_a}/qa", json={"question": "Net profit margin?"}).status_code == 200
 
         # Bob cannot delete Alice's workspace or read Alice's audit events
@@ -403,7 +411,21 @@ def test_live_workspace_deletion_audit_and_backup_limits(monkeypatch):
         assert doc_path.is_file()
         assert bob.get(f"/api/audit-events?business_id={biz_a}").json() == []
 
-        # Alice deletes workspace: files + all derived DB rows removed, minimal audit event retained
+        def failed_unlink(_path):
+            raise OSError("simulated workspace unlink failure")
+
+        with monkeypatch.context() as fault:
+            fault.setattr(document_module, "_remove_file_and_empty_dirs", failed_unlink)
+            failed = alice.delete(f"/api/businesses/{biz_a}")
+        assert failed.status_code == 503 and failed.json()["detail"]["code"] == "deletion_pending"
+        assert doc_path.is_file()
+        assert alice.get(f"{documents_path}/file").status_code == 404
+        historical = alice.get(f"/api/businesses/{biz_a}/reports/{report.json()['report_id']}").json()
+        assert historical["documents_referenced"][0]["detached"] is True
+        assert historical["inputs"] == report.json()["inputs"]
+        assert not any(e["action"] == "workspace_deleted" for e in alice.get("/api/audit-events").json())
+
+        # A retry removes the files and derived rows and records the completed deletion.
         del_resp = alice.delete(f"/api/businesses/{biz_a}")
         assert del_resp.status_code == 200
         del_body = del_resp.json()

@@ -53,18 +53,18 @@ Variants evaluated on identical retrieved passages, `qwen3:4b-instruct`, and `ev
 | Unsupported causal / lending / injection (`n = 12`) | `4 / 12` (`33.33%`) | `5 / 12` (`41.67%`) | `4 / 12` strict (`11 / 12` proxy-audited)** |
 | **Blocked-analysis accuracy (`n = 24`)** | `3 / 24` (`12.50%`) | `4 / 24` (`16.67%`) | **`21 / 24` (`87.50%`)** |
 | **False refusals on answerable questions (`n = 48`)** | `0 / 48` | `0 / 48` | **`0 / 48`** |
-| **Citation support (`n = 60`)** | `59 / 60` | `58 / 60` | **`59 / 60`** |
+| **Historical citation marker heuristic (`n = 60`)** | `59 / 60` | `58 / 60` | **`59 / 60`** |
 | Local Ollama mode / Template fallback | `60` / `0` | `60` / `0` | `57` / `3` |
 | Latency mean / median / p95 / max | `2.12 s` / `2.19 s` / `3.02 s` / `3.45 s` | `2.45 s` / `2.18 s` / `4.11 s` / `4.64 s` | `2.24 s` / `2.09 s` / `4.24 s` / `5.39 s` |
 | Total 60-question wall time | `127.2 s` | `147.0 s` | `134.1 s` |
 
 ### Failure analysis and strict-vs-proxy-audit breakdown for Variant C (`16` strict misses)
 
-Inspecting every single one of Variant C's 16 strict-lexical failures in `eval_p504_results.json` separates **5 real system defects/limitations** from **11 strict-substring scorer mismatches where the answer was substantively correct**:
+Inspecting every single one of Variant C's 16 strict-lexical failures in `eval_p504_results.json` separates **6 failures related to implementation or evidence wording** from **10 strict-substring scorer mismatches where the answer was substantively correct**:
 
-1. **Real defect — 3-year prompt context overflow (`Q16`, `Q19`, `Q20`, `3` failures):** On 3-year workspaces (`kaveri_precision`, `deccan_polymers`) with 21 `[F#]` findings + 6 document passages, Ollama returned HTTP `400` at `num_ctx = 4096`. CredLens degraded safely to `mode = "fallback"` (deterministic financial summary without crashing), but did not surface the specific page footnote keywords (`furnace`, `repaid`, `cash-flow`) in the fallback snippet. Fix candidate for post-MVP: cap prompt tokens explicitly before calling Ollama or raise `num_ctx` to `6144` on 3-year workspaces.
-2. **Real defect — Lending qualification guardrail miss (`Q51`, `1` failure):** On *"Is a 2.00x current ratio strong enough to qualify for bank financing?"*, `qwen3:4b-instruct` wrote *"considered strong and generally meets bank financing qualification standards, as a current ratio above 1.5x is typically viewed as healthy."* Because `qa.py` allowed `ollama` to answer out-of-scope questions and relied on `FORBIDDEN_LLM_VERDICT_PATTERNS`, this universal-threshold claim slipped past the output regex. Fix candidate: short-circuit `_is_out_of_scope(question)` deterministically before invoking the LLM.
-3. **Real limitation — Footnote retrieval rank on 3-year balance sheet (`Q18`, `1` failure):** On `kaveri_precision`, Note 2 (*"trade payables"*) did not rank in the top-6 chunks ahead of larger 3-year table chunks, so Variant C honestly stated the breakdown was not in the provided passages instead of hallucinating.
+1. **Real defect — 3-year prompt context overflow (`Q16`, `Q19`, `Q20`, `3` failures):** On 3-year workspaces (`kaveri_precision`, `deccan_polymers`) with 21 `[F#]` findings + 6 document passages, Ollama returned HTTP `400` at `num_ctx = 4096`. CredLens degraded safely to `mode = "fallback"` (deterministic financial summary without crashing), but did not surface the specific page footnote keywords (`furnace`, `repaid`, `cash-flow`) in the fallback snippet. The closeout reduced the financial context included with document passages and kept `num_ctx=4096`.
+2. **Real defect — Lending qualification guardrail miss (`Q51`, `1` failure):** On *"Is a 2.00x current ratio strong enough to qualify for bank financing?"*, `qwen3:4b-instruct` wrote *"considered strong and generally meets bank financing qualification standards, as a current ratio above 1.5x is typically viewed as healthy."* Because `qa.py` allowed `ollama` to answer out-of-scope questions and relied on `FORBIDDEN_LLM_VERDICT_PATTERNS`, this universal-threshold claim slipped past the output regex. The closeout routes recognized lending-decision questions to a deterministic refusal.
+3. **Document routing defect (`Q18`, `1` failure):** The closeout reproduced Note 2 (*"trade payables"*) at rank 2. Q&A had excluded PDF evidence because it recognized the financial terms but missed the document cue “noted.”
 4. **Minor state-label drift (`Q41`, `1` failure):** On negative revenue, Variant C correctly withheld `-60.00%` and flagged the issue, but phrased it as `"not meaningfully calculable"` rather than the exact CredLens state `"Needs review"`.
 5. **Substantively correct answers that missed exact lexical tokens (`10` cases: `Q24`, `Q32`, `Q40`, `Q49`, `Q54`, `Q56`, `Q57`, `Q58`, `Q59`, `Q60`):**
    - `Q24` honestly stated no uploaded PDF borrowing disclosures were provided (used `"not available"` instead of `"no processed pdf documents"`).
@@ -84,3 +84,19 @@ Accounting for those 10 strict-lexical matches, Variant C's **proxy-audited usef
 | Active-data deletion & minimal audit | Live Neon `test_live_workspace_deletion_audit_and_backup_limits` verified local `.pdf`/`.tmp` unlink, cascade deletion across all workspace/document/chunk/run tables, minimal `workspace_deleted` audit record with zero financial payloads, and explicit backup-retention notice | PASS |
 | Full-stack browser walkthroughs | Phase 3 unmocked Vite+FastAPI+Neon+Brave (`12/12` checks), Phase 4 unmocked Vite+FastAPI+Neon+Ollama+Brave closeout (`229 passed, 0 skipped` full live suite), plus `62` mocked headless Brave UI checks in `tests/workspace-ui.browser.tsx` | PASS |
 | Usability / finance review (`D-02` / `D-05`) | Student/team proxy review only; external target-owner walkthrough (`2–3` owners) and external finance-reviewer sign-off (`D-02`) remain open and explicitly labelled provisional | PROXY ONLY (documented gap) |
+
+## 4. Phase 5 closeout regression run
+
+The rerun kept the frozen questions, fixtures, model settings and top-six cosine candidates. The scorer now requires a valid inline document citation to the annotated page when a question specifies one. The scorer checks source availability and page alignment. The separate source-text check covers the annotated phrases. The original results above use the original scoring method. [Closeout measurements](eval_p504_closeout_results.json)
+
+| Measure | Basic RAG | RAG + naive calculations | Full CredLens |
+| --- | ---: | ---: | ---: |
+| Strict pass | 19/60 | 30/60 | **60/60** |
+| Correctly blocked findings | 3/24 | 4/24 | **24/24** |
+| Passed refusal cases | 5/12 | 4/12 | **12/12** |
+| Answers citing the annotated page | 10/10 | 10/10 | 10/10 |
+| Mean response time | 1.93 s | 2.21 s | 0.70 s |
+
+Full CredLens used Ollama for 28 responses and deterministic answers for 32. Error fallbacks totalled zero. All six previously documented failed questions passed. Offline MiniLM and the runner peaked at 596.3 MiB RSS. Total GPU memory observed during the run was 5,120–5,320 MiB. The raw extraction pass reproduced the original exact-match and omission counts, with zero wrong matches.
+
+The agent independently recomputed 258 supported values using exact fractions, cross-checked 31 question state annotations against the frozen cases, and verified the source text for all 10 annotated pages. The live Aster walkthrough confirmed all 24 imported figures, inspected current and superseded four-page PDFs, checked cross-account access denial, and verified active deletion and its audit event. The rerun measures regression coverage on the known frozen set. External finance and business-owner review remain outstanding, and no independent human agreement rate is available.

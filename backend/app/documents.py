@@ -1,11 +1,5 @@
 import hashlib
-import io
-import json
 import os
-import re
-import subprocess
-import sys
-import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 from typing import BinaryIO
@@ -14,59 +8,31 @@ from uuid import UUID, uuid4
 from sqlalchemy import func, select
 from sqlalchemy.engine import Connection, Engine
 
+from app.settings import setting
 from app.audit import record_audit_event
 from app.models import analysis_runs, businesses, documents, revisions
-from app.pdf_limits import (
-    MAX_PDF_BYTES,
-    MAX_PDF_PAGES,
-    MAX_TEXT_CHARS,
-    MAX_WORKER_STDOUT_BYTES,
-    WALL_SECONDS,
+from app.pdf_processing import (
+    PDF_ERRORS, DocumentRejectError, inspect_pdf_file, read_bounded_upload, sanitize_pdf_filename,
 )
-from app.pdf_worker import PdfInspectionResult
 from app.retrieval import (
     EmbeddingUnavailableError,
     prepare_embedded_chunks,
     replace_document_chunks,
 )
-from app.schemas import (
+from app.schemas.documents import (
     DocumentExtractionResponse,
     DocumentExtractionSnapshot,
     DocumentSummary,
-    WorkspaceDeleteResponse,
 )
+from app.schemas.workspaces import WorkspaceDeleteResponse
+from app.workspace_access import document_scope, owned_business
+
 
 SUMMARY_COLUMNS = tuple(documents.c[key] for key in DocumentSummary.model_fields)
-READ_CHUNK_BYTES = 64 * 1024
-ALLOWED_CONTENT_TYPES = {
-    "",
-    "application/pdf",
-    "application/x-pdf",
-    "application/octet-stream",
-    "binary/octet-stream",
-}
-PDF_ERRORS = {
-    "encrypted_pdf": "Password-protected or encrypted PDFs are not supported.",
-    "corrupted_pdf": "PDF could not be parsed. Check the file and upload it again.",
-    "empty_pdf_pages": "PDF contains no readable pages.",
-    "too_many_pages": "PDF exceeds the 50-page limit.",
-    "scanned_only_pdf": "Scanned or image-only PDFs without selectable digital text are not supported.",
-    "parser_resource_limit": "PDF exceeds the parser resource budget. Use a smaller PDF or manual entry.",
-    "parser_timeout": "PDF processing timed out. Use a smaller PDF or retry processing.",
-    "parser_limits_unavailable": "Parser resource limits could not be installed on this host.",
-    "parser_unavailable": "PDF processing is unavailable. Check the local backend and retry.",
-    "file_too_large": "PDF exceeds the 20 MB maximum file size limit.",
-}
-
-
-class DocumentRejectError(Exception):
-    def __init__(self, status_code: int, code: str, message: str):
-        super().__init__(message)
-        self.status_code, self.code, self.message = status_code, code, message
 
 
 def get_storage_root() -> Path:
-    configured = os.getenv("DOCUMENT_STORAGE_DIR", "").strip()
+    configured = setting("DOCUMENT_STORAGE_DIR", "").strip()
     return (
         Path(configured).resolve()
         if configured
@@ -80,141 +46,6 @@ def document_file_path(owner_id: UUID, business_id: UUID, document_id: UUID) -> 
     if root not in target.parents:
         raise ValueError("Invalid document storage path")
     return target
-
-
-def sanitize_pdf_filename(filename: str | None) -> str:
-    raw = (filename or "").strip()
-    base = Path(raw.replace("\\", "/")).name.strip()
-    base = re.sub(r"[\x00-\x1f\x7f]+", "", base)
-    if not base or not base.lower().endswith(".pdf") or len(base) <= 4:
-        raise DocumentRejectError(
-            415,
-            "unsupported_file_type",
-            "Only PDF files (.pdf) are supported.",
-        )
-    if len(base) > 255:
-        stem = base[:-4][:251].rstrip()
-        base = f"{stem}.pdf"
-    return base
-
-
-def read_bounded_upload(stream: BinaryIO, content_type: str | None) -> bytes:
-    normalized_type = (content_type or "").split(";")[0].strip().lower()
-    if normalized_type not in ALLOWED_CONTENT_TYPES:
-        raise DocumentRejectError(
-            415,
-            "unsupported_media_type",
-            "Unsupported content type. Upload a digital PDF file (application/pdf).",
-        )
-    chunks: list[bytes] = []
-    total = 0
-    while True:
-        chunk = stream.read(READ_CHUNK_BYTES)
-        if not chunk:
-            break
-        total += len(chunk)
-        if total > MAX_PDF_BYTES:
-            raise DocumentRejectError(
-                413,
-                "file_too_large",
-                "PDF exceeds the 20 MB maximum file size limit.",
-            )
-        chunks.append(chunk)
-    if total == 0:
-        raise DocumentRejectError(
-            400,
-            "empty_file",
-            "Uploaded PDF file is empty.",
-        )
-    data = b"".join(chunks)
-    header_window = data[:1024]
-    pdf_pos = header_window.find(b"%PDF-")
-    if pdf_pos == -1 or (pdf_pos > 0 and header_window[:pdf_pos].strip()):
-        raise DocumentRejectError(
-            415,
-            "invalid_pdf_header",
-            "File does not have a valid PDF header.",
-        )
-    return data
-
-
-def inspect_pdf_file(path: Path) -> PdfInspectionResult:
-    env = {
-        key: value
-        for key, value in os.environ.items()
-        if key in {"PATH", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "LANG", "LC_ALL"}
-    }
-    try:
-        result = subprocess.run(
-            [sys.executable, "-m", "app.pdf_worker", str(path)],
-            cwd=Path(__file__).resolve().parents[1],
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            timeout=WALL_SECONDS,
-        )
-    except subprocess.TimeoutExpired:
-        raise DocumentRejectError(
-            422, "parser_timeout", PDF_ERRORS["parser_timeout"]
-        ) from None
-    except OSError:
-        raise DocumentRejectError(
-            503, "parser_unavailable", PDF_ERRORS["parser_unavailable"]
-        ) from None
-    if result.returncode or len(result.stdout) > MAX_WORKER_STDOUT_BYTES:
-        raise DocumentRejectError(
-            422, "parser_resource_limit", PDF_ERRORS["parser_resource_limit"]
-        )
-    try:
-        body = json.loads(result.stdout)
-        if not isinstance(body, dict):
-            raise ValueError
-        if "error" in body:
-            code = body["error"]
-            if code not in PDF_ERRORS:
-                raise ValueError
-            raise DocumentRejectError(422, code, PDF_ERRORS[code])
-        pages, chars, raw_extraction = body["pages"], body["chars"], body["extraction"]
-        if (
-            type(pages) is not int
-            or not 1 <= pages <= MAX_PDF_PAGES
-            or type(chars) is not int
-            or not 1 <= chars <= MAX_TEXT_CHARS
-            or not isinstance(raw_extraction, dict)
-        ):
-            raise ValueError
-        snapshot = DocumentExtractionSnapshot.model_validate(raw_extraction)
-        if snapshot.page_count != pages or snapshot.extracted_char_count != chars:
-            raise ValueError
-        return PdfInspectionResult(pages, chars, snapshot.model_dump(mode="json"))
-    except DocumentRejectError:
-        raise
-    except Exception:
-        raise DocumentRejectError(
-            503, "parser_unavailable", PDF_ERRORS["parser_unavailable"]
-        ) from None
-
-
-def inspect_pdf_bytes(data: bytes) -> PdfInspectionResult:
-    data = read_bounded_upload(io.BytesIO(data), "application/pdf")
-    with tempfile.TemporaryDirectory(prefix="credlens-pdf-") as directory:
-        path = Path(directory) / "input.pdf"
-        path.write_bytes(data)
-        return inspect_pdf_file(path)
-
-
-def _ensure_owned_business(
-    connection: Connection, owner_id: UUID, business_id: UUID
-) -> None:
-    if (
-        connection.execute(
-            select(businesses.c.id).where(
-                businesses.c.id == business_id, businesses.c.owner_id == owner_id
-            )
-        ).scalar_one_or_none()
-        is None
-    ):
-        raise LookupError("Business not found")
 
 
 def _try_job_lock(connection: Connection, owner_id: UUID) -> bool:
@@ -268,7 +99,7 @@ def _document_job(
     # A transaction-scoped advisory lock also works through Neon's transaction pooler.
     with engine.begin() as gate:
         if document_id is None:
-            _ensure_owned_business(gate, owner_id, business_id)
+            owned_business(gate, owner_id, business_id)
         else:
             _owned_document(gate, owner_id, business_id, document_id)
         if not _try_job_lock(gate, owner_id):
@@ -297,10 +128,10 @@ def _row_to_extraction_response(row) -> DocumentExtractionResponse:
             extraction=None,
         )
     if status == "failed":
-        if row["error_code"] == "deletion_pending":
+        if row["error_code"] == DELETION_PENDING:
             return DocumentExtractionResponse(
                 **base,
-                extraction_status="deletion_pending",
+                extraction_status=DELETION_PENDING,
                 extraction_message=row["error_message"],
                 extraction=None,
             )
@@ -353,7 +184,7 @@ def _owned_document(
     *,
     extraction: bool = False,
 ):
-    _ensure_owned_business(connection, owner_id, business_id)
+    owned_business(connection, owner_id, business_id)
     columns = (
         (*SUMMARY_COLUMNS, documents.c.extraction) if extraction else SUMMARY_COLUMNS
     )
@@ -361,8 +192,7 @@ def _owned_document(
         connection.execute(
             select(*columns).where(
                 documents.c.id == document_id,
-                documents.c.business_id == business_id,
-                documents.c.owner_id == owner_id,
+                *document_scope(owner_id, business_id),
             )
         )
         .mappings()
@@ -376,11 +206,11 @@ def _owned_document(
 def list_documents(
     connection: Connection, owner_id: UUID, business_id: UUID
 ) -> list[DocumentSummary]:
-    _ensure_owned_business(connection, owner_id, business_id)
+    owned_business(connection, owner_id, business_id)
     reconcile_interrupted_documents(connection, owner_id, business_id)
     rows = connection.execute(
         select(*SUMMARY_COLUMNS)
-        .where(documents.c.business_id == business_id, documents.c.owner_id == owner_id)
+        .where(*document_scope(owner_id, business_id))
         .order_by(documents.c.created_at.desc(), documents.c.id.desc())
     ).mappings()
     return [_row_to_summary(row) for row in rows]
@@ -403,8 +233,11 @@ def _write_pdf_atomically(target: Path, data: bytes) -> None:
 def _remove_file_and_empty_dirs(target: Path) -> None:
     target.unlink(missing_ok=True)
     target.with_suffix(".tmp").unlink(missing_ok=True)
+    _prune_empty_dirs(target.parent)
+
+
+def _prune_empty_dirs(parent: Path) -> None:
     root = get_storage_root()
-    parent = target.parent
     while parent != root and root in parent.parents:
         try:
             parent.rmdir()
@@ -418,7 +251,7 @@ def _finish_processing(
     document_id: UUID,
     path: Path,
     *,
-    audit_action: str | None = None,
+    audit_action: str,
 ) -> DocumentSummary:
     snapshot: DocumentExtractionSnapshot | None = None
     try:
@@ -428,27 +261,11 @@ def _finish_processing(
                 "missing_storage_file",
                 "Stored PDF is unavailable. Remove and re-upload it.",
             )
-        inspected = inspect_pdf_file(path)
-        pages, chars = inspected
-        raw_extraction = getattr(inspected, "extraction", None)
-        if not isinstance(raw_extraction, dict):
-            raise DocumentRejectError(
-                503, "parser_unavailable", PDF_ERRORS["parser_unavailable"]
-            )
-        try:
-            snapshot = DocumentExtractionSnapshot.model_validate(raw_extraction)
-        except Exception:
-            raise DocumentRejectError(
-                503, "parser_unavailable", PDF_ERRORS["parser_unavailable"]
-            ) from None
-        if snapshot.page_count != pages or snapshot.extracted_char_count != chars:
-            raise DocumentRejectError(
-                503, "parser_unavailable", PDF_ERRORS["parser_unavailable"]
-            )
+        snapshot = inspect_pdf_file(path)
         values = dict(
             status="ready",
-            page_count=pages,
-            extracted_char_count=chars,
+            page_count=snapshot.page_count,
+            extracted_char_count=snapshot.extracted_char_count,
             extraction=snapshot.model_dump(mode="json"),
             error_code=None,
             error_message=None,
@@ -474,7 +291,7 @@ def _finish_processing(
                 .mappings()
                 .one()
             )
-        if values["extraction"]["document_sha256"] != meta["sha256"]:
+        if snapshot.document_sha256 != meta["sha256"]:
             values = dict(
                 status="failed",
                 page_count=None,
@@ -506,16 +323,14 @@ def _finish_processing(
             document_id,
             embedded_chunks if values["status"] == "ready" and embedded_chunks else [],
         )
-        if audit_action is not None:
-            record_audit_event(
-                connection,
-                row["owner_id"],
-                audit_action,
-                "document",
-                resource_id=document_id,
-                business_id=row["business_id"],
-                details={"status": values["status"]},
-            )
+        record_audit_event(
+            connection,
+            row["owner_id"],
+            audit_action,
+            resource_id=document_id,
+            business_id=row["business_id"],
+            details={"status": values["status"]},
+        )
         summary = _row_to_summary(row)
     return summary
 
@@ -570,7 +385,6 @@ def upload_and_process_document(
                     connection,
                     owner_id,
                     "document_uploaded",
-                    "document",
                     resource_id=document_id,
                     business_id=business_id,
                     details={"status": "failed"},
@@ -581,30 +395,32 @@ def upload_and_process_document(
         )
 
 
+def _mark_processing(connection: Connection, document_id: UUID) -> None:
+    connection.execute(
+        documents.update().where(documents.c.id == document_id).values(
+            status="processing",
+            page_count=None,
+            extracted_char_count=None,
+            error_code=None,
+            error_message=None,
+            updated_at=func.now(),
+        )
+    )
+
+
 def retry_document_processing(
     engine: Engine, owner_id: UUID, business_id: UUID, document_id: UUID
 ) -> DocumentSummary:
     with _document_job(engine, owner_id, business_id, document_id):
         with engine.begin() as connection:
             row = _owned_document(connection, owner_id, business_id, document_id)
-            if row["status"] == "ready" or row["error_code"] == "deletion_pending":
+            if row["status"] == "ready" or row["error_code"] == DELETION_PENDING:
                 raise DocumentRejectError(
                     409,
                     "not_retryable",
                     "Document is ready or pending removal; refresh its status.",
                 )
-            connection.execute(
-                documents.update()
-                .where(documents.c.id == document_id)
-                .values(
-                    status="processing",
-                    page_count=None,
-                    extracted_char_count=None,
-                    error_code=None,
-                    error_message=None,
-                    updated_at=func.now(),
-                )
-            )
+            _mark_processing(connection, document_id)
         return _finish_processing(
             engine,
             document_id,
@@ -636,18 +452,7 @@ def extract_ready_document(
                     "document_not_ready",
                     "Document must be ready before running extraction; retry failed processing first.",
                 )
-            connection.execute(
-                documents.update()
-                .where(documents.c.id == document_id)
-                .values(
-                    status="processing",
-                    page_count=None,
-                    extracted_char_count=None,
-                    error_code=None,
-                    error_message=None,
-                    updated_at=func.now(),
-                )
-            )
+            _mark_processing(connection, document_id)
         _finish_processing(
             engine,
             document_id,
@@ -671,32 +476,37 @@ def get_document_file(
     return _row_to_summary(row), path
 
 
+DELETION_PENDING = "deletion_pending"
+DOCUMENT_REMOVAL_PENDING = "Removal is pending. Use Remove again to finish."
+WORKSPACE_REMOVAL_PENDING = "Workspace removal is pending. Retry Delete workspace to finish."
+
+
+def _mark_deletion_pending(connection: Connection, filters, message: str) -> None:
+    connection.execute(
+        documents.update().where(*filters).values(
+            status="failed", error_code=DELETION_PENDING,
+            error_message=message, updated_at=func.now(),
+        )
+    )
+
+
 def delete_document(
     engine: Engine, owner_id: UUID, business_id: UUID, document_id: UUID
 ) -> None:
     with _document_job(engine, owner_id, business_id, document_id):
         with engine.begin() as connection:
             _owned_document(connection, owner_id, business_id, document_id)
-            connection.execute(
-                documents.update()
-                .where(documents.c.id == document_id)
-                .values(
-                    status="failed",
-                    error_code="deletion_pending",
-                    error_message="Removal is pending. Use Remove again to finish.",
-                    updated_at=func.now(),
-                )
+            _mark_deletion_pending(
+                connection, (documents.c.id == document_id,), DOCUMENT_REMOVAL_PENDING
             )
-        # No unlink happens until the removal intent has successfully committed.
+        # An unlink is only safe once a rollback can no longer expose the PDF as ready.
         try:
             _remove_file_and_empty_dirs(
                 document_file_path(owner_id, business_id, document_id)
             )
         except OSError:
             raise DocumentRejectError(
-                503,
-                "deletion_pending",
-                "Removal is pending. Use Remove again to finish.",
+                503, DELETION_PENDING, DOCUMENT_REMOVAL_PENDING,
             ) from None
         with engine.begin() as connection:
             connection.execute(documents.delete().where(documents.c.id == document_id))
@@ -704,7 +514,6 @@ def delete_document(
                 connection,
                 owner_id,
                 "document_deleted",
-                "document",
                 resource_id=document_id,
                 business_id=business_id,
             )
@@ -728,40 +537,18 @@ def delete_workspace(
     """Staged deletion of an owned workspace, all local PDFs/temp files, and cascaded DB data."""
     with _document_job(engine, owner_id, business_id):
         with engine.begin() as connection:
-            _ensure_owned_business(connection, owner_id, business_id)
+            owned_business(connection, owner_id, business_id)
             doc_ids = list(
                 connection.execute(
                     select(documents.c.id).where(
-                        documents.c.business_id == business_id,
-                        documents.c.owner_id == owner_id,
+                        *document_scope(owner_id, business_id),
                     )
                 ).scalars()
             )
-            runs_count = connection.execute(
-                select(func.count())
-                .select_from(analysis_runs)
-                .where(analysis_runs.c.business_id == business_id)
-            ).scalar_one()
-            revisions_count = connection.execute(
-                select(func.count())
-                .select_from(revisions)
-                .where(revisions.c.business_id == business_id)
-            ).scalar_one()
             if doc_ids:
-                connection.execute(
-                    documents.update()
-                    .where(
-                        documents.c.business_id == business_id,
-                        documents.c.owner_id == owner_id,
-                    )
-                    .values(
-                        status="failed",
-                        error_code="deletion_pending",
-                        error_message="Workspace removal is pending. Retry Delete workspace to finish.",
-                        updated_at=func.now(),
-                    )
+                _mark_deletion_pending(
+                    connection, document_scope(owner_id, business_id), WORKSPACE_REMOVAL_PENDING
                 )
-        # Unlink files only after deletion_pending intent has committed.
         try:
             for doc_id in doc_ids:
                 _remove_file_and_empty_dirs(
@@ -772,27 +559,30 @@ def delete_workspace(
                 for child in biz_dir.iterdir():
                     if child.is_file() or child.is_symlink():
                         child.unlink(missing_ok=True)
-                _remove_file_and_empty_dirs(biz_dir / "_cleanup")
+                _prune_empty_dirs(biz_dir)
         except OSError:
             raise DocumentRejectError(
-                503,
-                "deletion_pending",
-                "Workspace removal is pending. Retry Delete workspace to finish.",
+                503, DELETION_PENDING, WORKSPACE_REMOVAL_PENDING,
             ) from None
 
         with engine.begin() as connection:
-            deleted_id = connection.execute(
+            owned_business(connection, owner_id, business_id, for_update=True)
+            runs_count = connection.scalar(
+                select(func.count()).select_from(analysis_runs)
+                .where(analysis_runs.c.business_id == business_id)
+            )
+            revisions_count = connection.scalar(
+                select(func.count()).select_from(revisions)
+                .where(revisions.c.business_id == business_id)
+            )
+            connection.execute(
                 businesses.delete()
                 .where(businesses.c.id == business_id, businesses.c.owner_id == owner_id)
-                .returning(businesses.c.id)
-            ).scalar_one_or_none()
-            if deleted_id is None:
-                raise LookupError("Business not found")
+            )
             record_audit_event(
                 connection,
                 owner_id,
                 "workspace_deleted",
-                "workspace",
                 resource_id=business_id,
                 business_id=business_id,
                 details={

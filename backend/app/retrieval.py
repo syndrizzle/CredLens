@@ -11,24 +11,20 @@ from uuid import UUID, uuid4
 from sqlalchemy import delete, select
 from sqlalchemy.engine import Connection
 
-from app.models import businesses, document_chunks, documents
-from app.pdf_extraction import FY_SPAN_RE, MARCH_31_PATTERNS
-from app.schemas import (
-    DocumentExtractionSnapshot,
-    ExtractedPage,
-    RetrievalResponse,
-    RetrievedPassage,
-)
+from app.settings import setting
+
+from app.models import document_chunks, documents
+from app.financial_dates import FY_SPAN_RE, MARCH_31_PATTERNS, format_financial_year
+from app.schemas.documents import DocumentExtractionSnapshot, ExtractedPage
+from app.schemas.evidence import MAX_TOP_K, MODEL_MAX_TOKENS, RetrievalResponse, RetrievedPassage
+from app.workspace_access import document_scope, owned_business, require_document
 
 EMBEDDING_MODEL_ID = "sentence-transformers/all-MiniLM-L6-v2"
 EMBEDDING_DIM = 384
-MODEL_MAX_TOKENS = 256
 CHUNK_TARGET_TOKENS = 220
 CHUNK_OVERLAP_WORDS = 16
 MAX_HEADER_TOKENS = 72
 MAX_CHUNKS_PER_DOCUMENT = 400
-DEFAULT_TOP_K = 6
-MAX_TOP_K = 6
 
 
 class EmbeddingUnavailableError(RuntimeError):
@@ -77,10 +73,6 @@ def _extract_page_period_years(
     return sorted(years)
 
 
-def _format_fy(year_start: int) -> str:
-    return f"FY {year_start}-{(year_start + 1) % 100:02d}"
-
-
 def _build_page_header(
     filename: str,
     page: ExtractedPage,
@@ -92,7 +84,7 @@ def _build_page_header(
     if section:
         parts.append(section[:80])
     if period_years:
-        parts.append(", ".join(_format_fy(y) for y in period_years[:4]))
+        parts.append(", ".join(format_financial_year(y) for y in period_years[:4]))
     if page.unit:
         parts.append(f"Unit: {page.unit}")
     header = " | ".join(parts)
@@ -100,7 +92,7 @@ def _build_page_header(
         return header, section
     compact = f"{filename.strip()[:48]} | Page {page.page_number}"
     if period_years:
-        compact += f" | {', '.join(_format_fy(y) for y in period_years[:3])}"
+        compact += f" | {', '.join(format_financial_year(y) for y in period_years[:3])}"
     if token_len(compact) <= MAX_HEADER_TOKENS:
         return compact, section
     return f"Page {page.page_number}", section
@@ -187,7 +179,7 @@ def _page_units(page: ExtractedPage) -> list[tuple[str | None, str]]:
 
 @lru_cache(maxsize=1)
 def get_embedding_model():
-    local_only = os.getenv("EMBEDDING_LOCAL_FILES_ONLY", "1").strip() != "0"
+    local_only = setting("EMBEDDING_LOCAL_FILES_ONLY", "1").strip() != "0"
     if local_only:
         os.environ.setdefault("HF_HUB_OFFLINE", "1")
         os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
@@ -377,34 +369,14 @@ def retrieve_passages(
     business_id: UUID,
     query: str,
     *,
-    top_k: int = DEFAULT_TOP_K,
+    top_k: int = MAX_TOP_K,
     year_start: int | None = None,
     document_id: UUID | None = None,
     model=None,
 ) -> RetrievalResponse:
-    # Enforce business ownership BEFORE any embedding or vector scan.
-    if (
-        connection.execute(
-            select(businesses.c.id).where(
-                businesses.c.id == business_id, businesses.c.owner_id == owner_id
-            )
-        ).scalar_one_or_none()
-        is None
-    ):
-        raise LookupError("Business not found")
-
+    owned_business(connection, owner_id, business_id)
     if document_id is not None:
-        if (
-            connection.execute(
-                select(documents.c.id).where(
-                    documents.c.id == document_id,
-                    documents.c.business_id == business_id,
-                    documents.c.owner_id == owner_id,
-                )
-            ).scalar_one_or_none()
-            is None
-        ):
-            raise LookupError("Document not found")
+        require_document(connection, owner_id, business_id, document_id)
 
     bounded_k = max(1, min(top_k, MAX_TOP_K))
     query_vec = embed_texts([query.strip()], model=model)[0]
@@ -427,8 +399,7 @@ def retrieve_passages(
         .where(
             document_chunks.c.owner_id == owner_id,
             document_chunks.c.business_id == business_id,
-            documents.c.owner_id == owner_id,
-            documents.c.business_id == business_id,
+            *document_scope(owner_id, business_id),
             documents.c.status == "ready",
         )
     )

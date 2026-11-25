@@ -176,7 +176,7 @@ export type DocumentCitation = {
 export type QAResponse = {
   question: string;
   answer: string;
-  mode: "ollama" | "fallback";
+  mode: "ollama" | "fallback" | "deterministic";
   model: string | null;
   fallback_reason: string | null;
   retrieval_status: "ok" | "no_documents" | "unavailable";
@@ -453,11 +453,12 @@ export async function fetchReports(businessId: string): Promise<ReportSummary[]>
   return body;
 }
 
-export async function generateReport(businessId: string): Promise<PreparationReportResponse> {
+export async function generateReport(businessId: string, signal?: AbortSignal): Promise<PreparationReportResponse> {
+  const timeout = AbortSignal.timeout(30000);
   const response = await fetch(`/api/businesses/${encodeURIComponent(businessId)}/reports`, {
     method: "POST",
     credentials: "same-origin",
-    signal: AbortSignal.timeout(30000),
+    signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
   });
   return parseReportResponse(response);
 }
@@ -465,10 +466,12 @@ export async function generateReport(businessId: string): Promise<PreparationRep
 export async function fetchReport(
   businessId: string,
   reportId: string,
+  signal?: AbortSignal,
 ): Promise<PreparationReportResponse> {
+  const timeout = AbortSignal.timeout(30000);
   const response = await fetch(
     `/api/businesses/${encodeURIComponent(businessId)}/reports/${encodeURIComponent(reportId)}`,
-    { credentials: "same-origin", signal: AbortSignal.timeout(30000) },
+    { credentials: "same-origin", signal: signal ? AbortSignal.any([signal, timeout]) : timeout },
   );
   return parseReportResponse(response);
 }
@@ -709,7 +712,7 @@ function validQAResponse(value: unknown): value is QAResponse {
   return record(value) &&
     typeof value.question === "string" && value.question.length > 0 &&
     typeof value.answer === "string" && value.answer.length > 0 &&
-    (value.mode === "ollama" || value.mode === "fallback") &&
+    (value.mode === "ollama" || value.mode === "fallback" || value.mode === "deterministic") &&
     (value.model === null || typeof value.model === "string") &&
     (value.fallback_reason === null || typeof value.fallback_reason === "string") &&
     ["ok", "no_documents", "unavailable"].includes(value.retrieval_status as string) &&

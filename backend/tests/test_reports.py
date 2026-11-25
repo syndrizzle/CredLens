@@ -25,7 +25,9 @@ from app.reports import (
     build_documents_referenced,
     build_missing_evidence,
 )
-from app.schemas import AnalysisRequest, ReportSummary, SessionResponse
+from app.schemas.auth import SessionResponse
+from app.schemas.financial import AnalysisRequest
+from app.schemas.reports import ReportSummary
 
 
 def _aster_data(*, reviewed: bool = True) -> dict:
@@ -133,6 +135,9 @@ def test_report_assembly_complete_missing_evidence_documents_and_limitations():
     # Document reference deduplication across multiple pages
     doc_refs = build_documents_referenced(req)
     assert len(doc_refs) == 2
+    removed = build_documents_referenced(req, available=set())
+    assert all(reference.detached for reference in removed)
+    assert any(reference.document_id == doc_id and reference.pages == [1] for reference in removed)
 
 
 def test_superseded_status_and_reasons_across_revisions_and_runs():

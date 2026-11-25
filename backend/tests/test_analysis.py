@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 from app.analysis import analyse
 from app.main import app
-from app.schemas import AnalysisRequest, AnalysisResponse
+from app.schemas.financial import AnalysisRequest, AnalysisResponse
 
 
 @pytest.fixture

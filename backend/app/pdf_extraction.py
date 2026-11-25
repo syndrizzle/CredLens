@@ -1,10 +1,13 @@
 """Bounded Layout A candidate extraction for digital financial statement PDFs."""
 
 import re
+from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
+from app.financial_dates import FY_SPAN_RE, MARCH_31_PATTERNS
+from app.pdf_format import RawTable, has_note_heading
 from app.pdf_limits import (
     MAX_CANDIDATES,
     MAX_CELL_CHARS,
@@ -16,17 +19,14 @@ from app.pdf_limits import (
     MAX_TOTAL_TABLE_ROWS,
     MAX_TOTAL_TEXT_LENGTH,
 )
-from app.schemas import (
-    NOTE_HEADERS,
-    UNIT_MULTIPLIERS,
+from app.schemas.documents import (
     CandidateIssueCode,
     DocumentExtractionSnapshot,
     ExtractedCandidate,
     ExtractedPage,
     ExtractedTable,
-    FinancialField,
-    Unit,
 )
+from app.schemas.financial import UNIT_MULTIPLIERS, FinancialField, Unit
 
 
 class ExtractionLimitExceeded(Exception):
@@ -108,13 +108,6 @@ NON_MARCH_DATE_RE = re.compile(
     r"|\b(?:[012]?\d|30)\s+(?:Mar|March),?\s+\d{4}\b",
     re.I,
 )
-MARCH_31_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"\b31\s+(?:Mar|March),?\s+(\d{4})\b", re.I),
-    re.compile(r"\b(?:Mar|March)\s+31,?\s+(\d{4})\b", re.I),
-    re.compile(r"\b31[-/.]0?3[-/.](\d{4})\b"),
-    re.compile(r"\b(\d{4})[-/.]0?3[-/.]31\b"),
-)
-FY_SPAN_RE = re.compile(r"\b(?:FY\s*)?(\d{4})\s*[-–/]\s*(\d{2}|\d{4})\b", re.I)
 PLAIN_INT_RE = re.compile(r"0|[1-9][0-9]{0,14}")
 INTL_GROUP_RE = re.compile(r"[1-9][0-9]{0,2}(?:,[0-9]{3})+")
 INDIAN_GROUP_RE = re.compile(r"[1-9][0-9]?(?:,[0-9]{2})*,[0-9]{3}")
@@ -247,23 +240,24 @@ def _borrowing_definition(field: str, label: str, notes: list[str]) -> list[str]
     return list(dict.fromkeys(evidence))
 
 
-def _resolve_page_context(
-    pre_table_lines: list[str],
-    header_row: list[str],
-    today: date,
-) -> tuple[
-    str | None,
-    str | None,
-    str | None,
-    CandidateIssueCode | None,
-    str | None,
-    list[int],
-    bool,
-    Unit | None,
-    int | None,
-    str | None,
-    CandidateIssueCode | None,
-]:
+@dataclass(frozen=True)
+class TableContext:
+    statement_title: str | None
+    basis: str | None
+    basis_context: str | None
+    basis_issue: CandidateIssueCode | None
+    period_context: str | None
+    years: list[int]
+    invalid_period: bool
+    unit: Unit | None
+    multiplier: int | None
+    unit_header: str | None
+    unit_issue: CandidateIssueCode | None
+
+
+def _resolve_table_context(
+    pre_table_lines: list[str], header_row: list[str], today: date
+) -> TableContext:
     statement_title: str | None = None
     for line in pre_table_lines:
         low = line.lower()
@@ -357,7 +351,7 @@ def _resolve_page_context(
         None if unit else ("conflicting_unit" if unit_lines else "missing_unit")
     )
 
-    return (
+    return TableContext(
         statement_title,
         basis,
         basis_context,
@@ -382,8 +376,7 @@ def _is_layout_a_table(rows: list[list[str]]) -> tuple[bool, int | None, list[in
     first = _normalize_space(header[0]).lower().strip(":.")
     if first not in LABEL_HEADERS:
         return False, None, []
-    second = _normalize_space(header[1]).lower().strip(":.")
-    if second in NOTE_HEADERS:
+    if has_note_heading(header[1]):
         if cols < 3:
             return False, None, []
         return True, 1, list(range(2, cols))
@@ -395,9 +388,8 @@ def _is_layout_a_table(rows: list[list[str]]) -> tuple[bool, int | None, list[in
 def build_extraction_snapshot(
     document_sha256: str,
     extracted_char_count: int,
-    raw_pages: list[tuple[int, str, list[list[list[str | None]]]]],
+    raw_pages: list[tuple[int, str, list[RawTable]]],
     *,
-    table_contexts: dict[tuple[int, int], tuple[str, str]],
     today: date | None = None,
 ) -> DocumentExtractionSnapshot:
     if today is None:
@@ -423,17 +415,17 @@ def build_extraction_snapshot(
         page_tables: list[ExtractedTable] = []
         page_row_count = 0
         for table_idx, raw_table in enumerate(page_raw_tables, 1):
-            if not raw_table:
+            if not raw_table.rows:
                 continue
-            page_row_count += len(raw_table)
-            total_table_rows += len(raw_table)
+            page_row_count += len(raw_table.rows)
+            total_table_rows += len(raw_table.rows)
             if (
                 page_row_count > MAX_TABLE_ROWS_PER_PAGE
                 or total_table_rows > MAX_TOTAL_TABLE_ROWS
             ):
                 raise ExtractionLimitExceeded("Table rows exceed budget")
             clean_rows: list[list[str]] = []
-            for raw_row in raw_table:
+            for raw_row in raw_table.rows:
                 if not 1 <= len(raw_row) <= MAX_TABLE_COLS:
                     raise ExtractionLimitExceeded("Table columns exceed budget")
                 total_table_cells += len(raw_row)
@@ -451,13 +443,7 @@ def build_extraction_snapshot(
             page_tables.append(ExtractedTable(table_index=table_idx, rows=clean_rows))
 
         page_issues: list[str] = []
-        page_title: str | None = None
-        page_basis: str | None = None
-        page_basis_context: str | None = None
-        page_period_context: str | None = None
-        page_unit: Unit | None = None
-        page_multiplier: int | None = None
-        page_unit_header: str | None = None
+        page_context = None
         page_has_layout_a = False
 
         for table in page_tables:
@@ -467,36 +453,16 @@ def build_extraction_snapshot(
             page_has_layout_a = True
             any_layout_a = True
             header_row = table.rows[0]
-            heading, footer = table_contexts.get(
-                (page_number, table.table_index), ("", "")
-            )
+            raw_table = page_raw_tables[table.table_index - 1]
+            heading, footer = raw_table.heading, raw_table.footer
             pre_lines = [
                 line
                 for line in heading.splitlines()
                 if "fictional data" not in line.lower()
             ]
-            (
-                statement_title,
-                basis,
-                basis_context,
-                basis_issue,
-                period_context,
-                context_years,
-                context_invalid,
-                unit,
-                multiplier,
-                unit_header,
-                unit_issue,
-            ) = _resolve_page_context(pre_lines, header_row, today)
-
+            context = _resolve_table_context(pre_lines, header_row, today)
             if len(page_tables) == 1:
-                page_title = statement_title
-                page_basis = basis
-                page_basis_context = basis_context
-                page_period_context = period_context
-                page_unit = unit
-                page_multiplier = multiplier
-                page_unit_header = unit_header
+                page_context = context
 
             col_parsed: dict[int, tuple[list[int], bool]] = {
                 col: _parse_fiscal_years(header_row[col], today) for col in amount_cols
@@ -513,14 +479,14 @@ def build_extraction_snapshot(
             col_resolution: dict[int, tuple[int | None, CandidateIssueCode | None]] = {}
             for col in amount_cols:
                 years, col_invalid = col_parsed[col]
-                if col_invalid or context_invalid or len(years) > 1:
+                if col_invalid or context.invalid_period or len(years) > 1:
                     col_resolution[col] = (None, "conflicting_period")
                 elif not years:
                     col_resolution[col] = (None, "missing_period")
                 else:
                     yr = years[0]
                     if (
-                        context_years and yr not in context_years
+                        context.years and yr not in context.years
                     ) or yr in duplicate_col_years:
                         col_resolution[col] = (None, "conflicting_period")
                     else:
@@ -528,7 +494,7 @@ def build_extraction_snapshot(
 
             source_context = [
                 line
-                for line in (statement_title, period_context, unit_header)
+                for line in (context.statement_title, context.period_context, context.unit_header)
                 if line is not None
             ]
 
@@ -562,12 +528,12 @@ def build_extraction_snapshot(
                         and amount > 0
                     ):
                         issues.append("ambiguous_mapping")
-                    if basis_issue is not None:
-                        issues.append(basis_issue)
+                    if context.basis_issue is not None:
+                        issues.append(context.basis_issue)
                     if period_issue is not None:
                         issues.append(period_issue)
-                    if unit_issue is not None:
-                        issues.append(unit_issue)
+                    if context.unit_issue is not None:
+                        issues.append(context.unit_issue)
                     if amount_issue is not None:
                         issues.append(amount_issue)
                     if len(cells) >= MAX_CANDIDATES:
@@ -587,13 +553,13 @@ def build_extraction_snapshot(
                             source_row=row,
                             source_context=evidence,
                             period_header=header_row[col],
-                            period_context=period_context,
+                            period_context=context.period_context,
                             year_start=year_start,
-                            unit_header=unit_header,
-                            unit=unit,
-                            multiplier=multiplier,
-                            basis="standalone" if basis == "standalone" else None,
-                            basis_context=basis_context,
+                            unit_header=context.unit_header,
+                            unit=context.unit,
+                            multiplier=context.multiplier,
+                            basis="standalone" if context.basis == "standalone" else None,
+                            basis_context=context.basis_context,
                             amount=amount,
                             issues=issues,
                         )
@@ -607,13 +573,13 @@ def build_extraction_snapshot(
                 page_number=page_number,
                 text=page_text,
                 tables=page_tables,
-                statement_title=page_title,
-                basis="standalone" if page_basis == "standalone" else None,
-                basis_context=page_basis_context,
-                period_context=page_period_context,
-                unit=page_unit,
-                multiplier=page_multiplier,
-                unit_header=page_unit_header,
+                statement_title=page_context.statement_title if page_context else None,
+                basis="standalone" if page_context and page_context.basis == "standalone" else None,
+                basis_context=page_context.basis_context if page_context else None,
+                period_context=page_context.period_context if page_context else None,
+                unit=page_context.unit if page_context else None,
+                multiplier=page_context.multiplier if page_context else None,
+                unit_header=page_context.unit_header if page_context else None,
                 issues=page_issues,
             )
         )

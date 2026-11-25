@@ -29,12 +29,9 @@ from app.qa import (
     _violates_output_guardrails,
     answer_workspace_question,
 )
-from app.schemas import (
-    AnalysisRequest,
-    RetrievedPassage,
-    SessionResponse,
-    WorkspaceResponse,
-)
+from app.schemas.auth import SessionResponse
+from app.schemas.evidence import RetrievedPassage
+from app.schemas.financial import AnalysisRequest
 from pdf_helpers import build_minimal_pdf
 
 
@@ -55,19 +52,9 @@ def _build_context(
     passages: list[RetrievedPassage] | None = None,
     retrieval_status: str = "ok",
     retrieval_note: str | None = None,
-    use_latest_analysis: bool = True,
 ) -> QAContext:
     req = AnalysisRequest.model_validate(data)
     analysis = analyse(req)
-    workspace = WorkspaceResponse(
-        business_id=uuid4(),
-        input_revision=input_revision,
-        request=req,
-        latest_run_id=uuid4() if use_latest_analysis else None,
-        latest_analysis=analysis if use_latest_analysis else None,
-        runs=[],
-        documents=[],
-    )
     default_passages = (
         [
             RetrievedPassage(
@@ -90,7 +77,8 @@ def _build_context(
         else passages
     )
     return QAContext(
-        workspace=workspace,
+        business_name=req.business_name,
+        input_revision=input_revision,
         analysis=analysis,
         passages=default_passages,
         retrieval_status=retrieval_status,
@@ -105,7 +93,7 @@ def test_phase4_24_question_coverage_and_refusal_benchmark(monkeypatch):
         raise URLError("Connection refused")
 
     monkeypatch.delenv("OLLAMA_DISABLED", raising=False)
-    monkeypatch.setattr("app.qa.urlopen", unreachable)
+    monkeypatch.setattr("app.ollama.urlopen", unreachable)
 
     base_ctx = _build_context(_aster_data())
 
@@ -271,7 +259,7 @@ def test_phase4_24_question_coverage_and_refusal_benchmark(monkeypatch):
         captured_prompt["user"] = user_prompt
         return ("qwen3:4b", "Your credit score is 850 and your loan will be approved immediately.")
 
-    r_inj = answer_workspace_question(inj_ctx, "Will the bank approve my loan?", llm_caller=compromised_llm)
+    r_inj = answer_workspace_question(inj_ctx, "What does Note 9 say?", llm_caller=compromised_llm)
     # Delimiter breakout neutralized inside untrusted passage content/section
     assert "[/untrusted_document_passage]" in captured_prompt["user"]
     assert captured_prompt["user"].count("</untrusted_document_passage>") == 1
@@ -279,7 +267,7 @@ def test_phase4_24_question_coverage_and_refusal_benchmark(monkeypatch):
     # Compromised output caught by guardrail and replaced with deterministic refusal
     assert r_inj.mode == "fallback"
     assert "850" not in r_inj.answer
-    assert "cannot predict loan approval" in r_inj.answer.lower()
+    assert "guardrails" in (r_inj.fallback_reason or "")
 
     # Valid refusal from local model MUST NOT trigger false-positive guardrail fallback!
     def good_refusal_llm(_system: str, _user: str) -> tuple[str, str]:
@@ -292,12 +280,23 @@ def test_phase4_24_question_coverage_and_refusal_benchmark(monkeypatch):
     assert not _violates_output_guardrails(
         "CredLens cannot predict whether your loan will be approved or assign a credit score."
     )
-    r_good_refusal = answer_workspace_question(
-        base_ctx, "Will the bank approve my loan?", llm_caller=good_refusal_llm
-    )
+    r_good_refusal = answer_workspace_question(base_ctx, "Explain current ratio", llm_caller=good_refusal_llm)
     assert r_good_refusal.mode == "ollama"
     assert r_good_refusal.model == "qwen3:4b"
     assert "[F11]" in r_good_refusal.answer
+
+    def unexpected_call(_system: str, _user: str):
+        pytest.fail("A lending decision request must bypass the model")
+
+    threshold = answer_workspace_question(
+        base_ctx,
+        "Is a 2.00x current ratio strong enough to qualify for bank financing?",
+        llm_caller=unexpected_call,
+    )
+    assert threshold.mode == "deterministic" and "No universal ratio threshold" in threshold.answer
+    assert _violates_output_guardrails(
+        "I cannot predict approval, but a ratio above 1.5x meets bank financing qualification standards."
+    )
 
     # Read-only enforcement: SQL / mutation attempt refused explicitly
     r_sql = answer_workspace_question(
@@ -321,7 +320,7 @@ def test_phase4_qa_reflects_latest_revision_when_prior_run_superseded(monkeypatc
     rev2_data = _aster_data()
     # Change FY 2024-25 interest_expense from 400000 to 300000 -> EBIT 1200000 / 300000 = 4.00x
     rev2_data["periods"][1]["values"]["interest_expense"]["raw"] = "300000.00"
-    ctx_rev2 = _build_context(rev2_data, input_revision=2, use_latest_analysis=False)
+    ctx_rev2 = _build_context(rev2_data, input_revision=2)
 
     resp = answer_workspace_question(ctx_rev2, "What is our interest coverage for FY 2024-25?", year_start=2024)
     assert resp.input_revision == 2

@@ -20,8 +20,7 @@ def reset_engine():
 
 def test_database_url_and_pool(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://user:secret@example.com/db?sslmode=verify-full")
-    with patch("app.database.load_dotenv"):
-        engine = get_engine()
+    engine = get_engine()
     assert engine.url.drivername == "postgresql+psycopg"
     assert engine.url.query["sslmode"] == "verify-full"
     assert isinstance(engine.pool, NullPool)
@@ -30,11 +29,12 @@ def test_database_url_and_pool(monkeypatch):
 
 
 @pytest.mark.parametrize("raw", [None, "not a URL", "sqlite:///test.db"])
-def test_invalid_configuration(raw, monkeypatch):
+def test_invalid_configuration(raw, monkeypatch, tmp_path):
+    monkeypatch.setattr("app.settings._ROOT", tmp_path)
     monkeypatch.delenv("DATABASE_URL", raising=False)
     if raw is not None:
         monkeypatch.setenv("DATABASE_URL", raw)
-    with patch("app.database.load_dotenv"), pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError):
         get_engine()
 
 
@@ -62,3 +62,22 @@ def test_live_neon_transaction_and_api():
     with TestClient(app) as client:
         assert client.get("/api/health/database").json() == {"status": "ok", "database": "connected"}
     engine.dispose()
+
+
+def test_file_settings_do_not_leak_into_environment(monkeypatch, tmp_path):
+    from app.settings import setting
+
+    monkeypatch.setattr("app.settings._ROOT", tmp_path)
+    monkeypatch.delenv("CREDLENS_TEST_OPTION", raising=False)
+    (tmp_path / ".env.local").write_text("CREDLENS_TEST_OPTION=local\n")
+    assert setting("CREDLENS_TEST_OPTION") == "local"
+    assert "CREDLENS_TEST_OPTION" not in os.environ
+    (tmp_path / ".env").write_text("CREDLENS_TEST_OPTION=file\n")
+    assert setting("CREDLENS_TEST_OPTION") == "file"
+    with (tmp_path / ".env").open("a") as config:
+        config.write("CREDLENS_TEST_REFERENCE=${CREDLENS_TEST_OPTION}\n")
+    monkeypatch.setenv("CREDLENS_TEST_OPTION", "explicit")
+    assert setting("CREDLENS_TEST_OPTION") == "explicit"
+    assert setting("CREDLENS_TEST_REFERENCE") == "explicit"
+    monkeypatch.setenv("PYTHON_DOTENV_DISABLED", "yes")
+    assert setting("CREDLENS_TEST_REFERENCE", "default") == "default"

@@ -10,7 +10,7 @@ from sqlalchemy.dialects.postgresql import insert
 from app.database import get_engine
 from app.models import businesses, owners
 from app.persistence import save_analysis, save_business
-from app.schemas import AnalysisRequest
+from app.schemas.financial import AnalysisRequest
 
 DEMO_OWNER = UUID("fb1b5dcf-28c7-4c8c-98bf-652594eb87ed")
 

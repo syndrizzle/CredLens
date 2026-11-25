@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from fastapi.testclient import TestClient
 import pytest
+from pydantic import ValidationError
 
 from app.analysis import analyse
 from app.auth import SESSION_COOKIE
@@ -16,20 +17,14 @@ from app.database import get_engine
 from app.main import app
 import app.main as main_module
 from app.models import businesses, owners
+from app.ollama import OllamaUnavailableError, _read_ollama_config, call_local_ollama
 from app.qa import (
-    OllamaUnavailableError,
     QAContext,
-    _read_ollama_config,
     answer_workspace_question,
-    call_local_ollama,
 )
-from app.schemas import (
-    AnalysisRequest,
-    QARequest,
-    RetrievedPassage,
-    SessionResponse,
-    WorkspaceResponse,
-)
+from app.schemas.auth import SessionResponse
+from app.schemas.evidence import QARequest, RetrievedPassage
+from app.schemas.financial import AnalysisRequest
 
 
 def _aster_request() -> AnalysisRequest:
@@ -57,15 +52,6 @@ def _sample_context(
     analysis = analyse(req)
     biz_id = uuid4()
     doc_id = uuid4()
-    workspace = WorkspaceResponse(
-        business_id=biz_id,
-        input_revision=2,
-        request=req,
-        latest_run_id=uuid4(),
-        latest_analysis=analysis,
-        runs=[],
-        documents=[],
-    )
     passages = (
         [
             RetrievedPassage(
@@ -88,7 +74,8 @@ def _sample_context(
         else []
     )
     return QAContext(
-        workspace=workspace,
+        business_name=req.business_name,
+        input_revision=2,
         analysis=analysis,
         passages=passages,
         retrieval_status=retrieval_status,
@@ -109,7 +96,7 @@ def test_qa_request_schema_enforces_bounds():
         {"question": "ok", "document_id": "not-a-uuid"},
         {"question": "ok", "extra": True},
     ):
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             QARequest.model_validate(bad)
 
 
@@ -173,7 +160,7 @@ def test_call_local_ollama_sends_d04_options_and_strips_thinking(monkeypatch):
         captured["payload"] = json.loads(req.data.decode("utf-8"))
         return _FakeResp()
 
-    monkeypatch.setattr("app.qa.urlopen", fake_urlopen)
+    monkeypatch.setattr("app.ollama.urlopen", fake_urlopen)
     model, content = call_local_ollama("sys", "usr")
     assert model == "qwen3:4b"
     assert "PRIVATE CHAIN OF THOUGHT" not in content
@@ -199,7 +186,7 @@ def test_ollama_mode_verifies_citations_and_strips_hallucinated_ids():
         return (
             "qwen3:4b",
             "Net profit margin changed from 9.00% [F2] to 5.00% [F9]. "
-            "Borrowings exclude leases [D1]. Hallucinated ref [D99] [F999] must vanish.",
+            "Borrowings exclude leases [D1]. Unavailable references [D99] [F999] [F1] must vanish.",
         )
 
     resp = answer_workspace_question(
@@ -210,6 +197,8 @@ def test_ollama_mode_verifies_citations_and_strips_hallucinated_ids():
     assert resp.fallback_reason is None
     assert "[D99]" not in resp.answer
     assert "[F999]" not in resp.answer
+    assert "[F1]" not in resp.answer and "[F1]" not in seen_prompt["user"]
+    assert any(c.citation_id == "F1" and not c.cited for c in resp.financial_citations)
     assert "[F2]" in resp.answer and "[F9]" in resp.answer and "[D1]" in resp.answer
     assert '<untrusted_document_passage id="D1"' in seen_prompt["user"]
     cited_fin = {c.citation_id for c in resp.financial_citations if c.cited}
@@ -225,12 +214,11 @@ def test_injected_or_forbidden_llm_verdict_reverts_to_deterministic_refusal():
         return ("qwen3:4b", "Your credit score is 820 and your loan will be approved immediately.")
 
     resp = answer_workspace_question(
-        ctx, "Will my loan be approved and what is my credit score?", llm_caller=compromised_llm
+        ctx, "What do the borrowing notes say?", llm_caller=compromised_llm
     )
     assert resp.mode == "fallback"
     assert "guardrails" in (resp.fallback_reason or "").lower()
     assert "820" not in resp.answer
-    assert "cannot predict loan approval" in resp.answer.lower()
     assert any(c.cited for c in resp.financial_citations)
 
 
@@ -239,14 +227,15 @@ def test_fallback_handles_numerical_causal_missing_interest_and_document_questio
         raise URLError("Connection refused")
 
     monkeypatch.delenv("OLLAMA_DISABLED", raising=False)
-    monkeypatch.setattr("app.qa.urlopen", unreachable)
+    monkeypatch.setattr("app.ollama.urlopen", unreachable)
 
     # 1. Causal margin question -> reports exact Python values + refuses unsupported cause + cites passage.
     ctx = _sample_context()
+    outage = answer_workspace_question(ctx, "What is our net profit margin?")
+    assert outage.mode == "fallback" and "not reachable" in (outage.fallback_reason or "").lower()
     r_margin = answer_workspace_question(ctx, "Why did net profit margin drop?")
-    assert r_margin.mode == "fallback"
+    assert r_margin.mode == "deterministic"
     assert r_margin.model is None
-    assert "not reachable" in (r_margin.fallback_reason or "").lower()
     assert "9.00%" in r_margin.answer
     assert "5.00%" in r_margin.answer
     assert "do not establish root causes" in r_margin.answer.lower()

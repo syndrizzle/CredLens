@@ -7,20 +7,20 @@ from uuid import uuid4
 import pytest
 from alembic import command
 from alembic.config import Config
-from app.analysis import MULTIPLIERS, analyse
+from app.analysis_runs import load_analysis
+from app.analysis import analyse
 from app.database import get_engine
 from app.models import analysis_runs, businesses, figures, owners, periods, revisions
 from app.persistence import (
-    load_analysis,
     load_business,
     load_workspace,
     save_analysis,
     save_business,
     update_business,
 )
-from app.schemas import AnalysisRequest, AnalysisResponse
+from app.schemas.financial import AnalysisRequest, AnalysisResponse, UNIT_MULTIPLIERS
 from sqlalchemy import event, func, select, text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 pytestmark = pytest.mark.skipif(
     not os.getenv("PERSISTENCE_TEST_URL"),
@@ -68,7 +68,7 @@ def test_committed_fixture_survives_reconnect_with_findings(db, request_data):
     with engine.connect() as connection:
         assert load_business(connection, owner, business) == request_data
         loaded_run = load_analysis(connection, owner, run)
-        assert loaded_run == analyse(request_data)
+        assert loaded_run.model_dump(include=set(AnalysisResponse.model_fields)) == analyse(request_data).model_dump()
         assert loaded_run.run_id == run
         assert loaded_run.business_id == business
         assert loaded_run.input_revision == 1
@@ -223,7 +223,7 @@ def test_saved_dependency_cases_and_actions_survive_reload(db, request_data, var
     engine.dispose()
     with engine.connect() as connection:
         actual = load_analysis(connection, owner, run)
-        assert actual == expected
+        assert actual.model_dump(include=set(AnalysisResponse.model_fields)) == expected.model_dump()
         assert actual.action_version == "preparation-actions-v1"
         assert load_workspace(connection, owner, business).latest_analysis == expected
         stored = connection.execute(
@@ -493,33 +493,23 @@ def test_concurrent_correction_interleaves_keep_workspace_reads_and_analysis_sna
         (run_1, 1, True)
     ]
 
-    # Interleave 2: concurrent update commits right after save_analysis's first SELECT on businesses.
+    # Analysis holds the workspace writer lock until its input snapshot is committed.
+    with engine.begin() as writer:
+        run_2 = save_analysis(writer, owner, business)
+        with pytest.raises(OperationalError) as blocked, engine.begin() as competitor:
+            competitor.execute(
+                select(businesses.c.id).where(businesses.c.id == business)
+                .with_for_update(nowait=True)
+            )
+        assert blocked.value.orig.sqlstate == "55P03"
+
     edited_rev3 = edited_rev2.model_copy(deep=True)
     edited_rev3.periods[1].values["interest_expense"].raw = "300000.00"
-    interleaved_save = {"triggered": False}
+    with engine.begin() as connection:
+        assert update_business(connection, owner, business, edited_rev3, expected_revision=2) == 3
+        assert load_analysis(connection, owner, run_2).superseded
+        run_3 = save_analysis(connection, owner, business)
 
-    with engine.begin() as conn1:
-
-        def on_save_select(
-            _conn, _cursor, statement, _parameters, _context, _executemany
-        ):
-            if not interleaved_save["triggered"] and "FROM businesses" in statement:
-                interleaved_save["triggered"] = True
-                with engine.begin() as conn2:
-                    assert (
-                        update_business(
-                            conn2, owner, business, edited_rev3, expected_revision=2
-                        )
-                        == 3
-                    )
-
-        event.listen(conn1, "after_cursor_execute", on_save_select)
-        try:
-            run_3 = save_analysis(conn1, owner, business)
-        finally:
-            event.remove(conn1, "after_cursor_execute", on_save_select)
-
-    assert interleaved_save["triggered"] is True
     with engine.connect() as connection:
         stored = (
             connection.execute(select(analysis_runs).where(analysis_runs.c.id == run_3))
@@ -576,7 +566,7 @@ def test_populated_upgrade_and_preexisting_baseline_preserve_monotonic_revisions
             )
             for period in request_data.periods:
                 pid = uuid4()
-                mult = MULTIPLIERS[period.unit]
+                mult = UNIT_MULTIPLIERS[period.unit]
                 connection.execute(
                     text(
                         "INSERT INTO periods (id, business_id, year_start, unit, multiplier, comparable_to_prior) "

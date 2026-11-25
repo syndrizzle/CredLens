@@ -320,7 +320,7 @@ function QATurnCard({
           <Badge variant={turn.mode === "ollama" ? "secondary" : "outline"}>
             {turn.mode === "ollama"
               ? `Local model (${turn.model ?? "ollama"})`
-              : "Template fallback"}
+              : turn.mode === "deterministic" ? "Deterministic answer" : "Template fallback"}
           </Badge>
           <Badge variant="outline">
             Input revision {turn.input_revision}

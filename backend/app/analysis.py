@@ -1,6 +1,7 @@
 from decimal import ROUND_HALF_UP, Context, Decimal, localcontext
 
-from app.schemas import (
+from app.schemas.financial import (
+    UNIT_MULTIPLIERS,
     ActionInput,
     ActionTarget,
     AnalysisRequest,
@@ -18,7 +19,6 @@ from app.schemas import (
     Reason,
 )
 
-MULTIPLIERS = {"rupees": 1, "thousands": 1000, "lakhs": 100000, "crores": 10000000}
 DEPENDENCIES: dict[Indicator, tuple[FinancialField, ...]] = {
     "revenue_growth": ("revenue",),
     "net_profit_margin": ("profit_after_tax", "revenue"),
@@ -59,7 +59,7 @@ def evidence(period: FinancialPeriod, field: FinancialField) -> InputEvidence:
         field=field,
         unit=period.unit,
         figure=figure.model_copy(deep=True),
-        normalized_inr=None if amount is None else amount * MULTIPLIERS[period.unit],
+        normalized_inr=None if amount is None else amount * UNIT_MULTIPLIERS[period.unit],
     )
 
 
@@ -115,7 +115,7 @@ def check_balance(period: FinancialPeriod) -> BalanceCheck:
         )
     ]
     reasons = input_reasons(inputs[:3])
-    tolerance = Decimal("0.015") * MULTIPLIERS[period.unit]
+    tolerance = Decimal("0.015") * UNIT_MULTIPLIERS[period.unit]
     difference = None
     if not reasons:
         assets, liabilities, equity = [item.normalized_inr for item in inputs[:3]]

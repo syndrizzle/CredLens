@@ -10,7 +10,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.audit import record_audit_event
 from app.models import accounts, owners, sessions
-from app.schemas import SessionResponse
+from app.schemas.auth import SessionResponse
 
 SESSION_COOKIE = "credlens_session"
 SESSION_MAX_AGE = 7 * 24 * 60 * 60
@@ -86,7 +86,7 @@ def register_account(
         raise ValueError("Account already exists") from None
     token = _create_session(connection, owner_id)
     record_audit_event(
-        connection, owner_id, "account_registered", "account", resource_id=owner_id
+        connection, owner_id, "account_registered", resource_id=owner_id
     )
     return SessionResponse(owner_id=owner_id, email=normalized), token
 
@@ -110,7 +110,6 @@ def authenticate_account(
         connection,
         row["owner_id"],
         "session_login",
-        "session",
         resource_id=row["owner_id"],
     )
     return SessionResponse(owner_id=row["owner_id"], email=row["email"]), token
@@ -148,6 +147,5 @@ def revoke_session(connection: Connection, token: str | None) -> None:
                 connection,
                 owner_id,
                 "session_logout",
-                "session",
                 resource_id=owner_id,
             )

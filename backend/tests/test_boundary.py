@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 from app.main import app
-from app.schemas import (
+from app.schemas.financial import (
     AnalysisRequest,
     FinancialValue,
     IndicatorResult,
@@ -244,7 +244,7 @@ def test_year_must_have_finished_before_today(
         def now(cls, tz=None):
             return datetime.fromisoformat(today).replace(tzinfo=tz)
 
-    monkeypatch.setattr("app.schemas.datetime", Clock)
+    monkeypatch.setattr("app.schemas.financial.datetime", Clock)
     payload["periods"][0]["year_start"] = 2025
     assert client.post("/api/validate", json=payload).status_code == status
 
