@@ -8,6 +8,8 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
     proxy: { "/api": "http://127.0.0.1:8000" },
+    // The backend virtualenv alone exceeds the default inotify watch limit.
+    watch: { ignored: ["**/backend/**"] },
   },
   resolve: {
     alias: {

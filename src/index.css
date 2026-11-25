@@ -4,7 +4,14 @@
 @import "@fontsource-variable/inter";
 @import "@fontsource-variable/merriweather";
 
-@custom-variant dark (&:is(.dark *));
+/* Dark styles apply on screen only, so printed reports always use the light palette. */
+@custom-variant dark {
+  @media screen {
+    &:is(.dark *) {
+      @slot;
+    }
+  }
+}
 
 :root {
     --background: oklch(1 0 0);
@@ -41,7 +48,9 @@
     --sidebar-ring: oklch(0.708 0 0);
 }
 
-.dark {
+@media screen {
+  .dark {
+    color-scheme: dark;
     --background: oklch(0.145 0 0);
     --foreground: oklch(0.985 0 0);
     --card: oklch(0.205 0 0);
@@ -73,6 +82,7 @@
     --sidebar-accent-foreground: oklch(0.985 0 0);
     --sidebar-border: oklch(1 0 0 / 10%);
     --sidebar-ring: oklch(0.556 0 0);
+  }
 }
 
 @theme inline {
@@ -137,6 +147,10 @@
   body {
     background: #ffffff !important;
     color: #111111 !important;
+  }
+  /* The sidebar's outer wrapper is not styleable through props. */
+  [data-slot="sidebar"] {
+    display: none !important;
   }
   .print-avoid-break {
     break-inside: avoid;

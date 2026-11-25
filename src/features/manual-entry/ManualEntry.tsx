@@ -33,6 +33,9 @@ import { WorkspaceQA } from "../qa/WorkspaceQA";
 import { PreparationReportPanel } from "../reports/PreparationReport";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
+import { Link, useNavigate } from "@tanstack/react-router";
+import { AppShell } from "@/app/AppShell";
+import { SECTIONS, type Section } from "@/app/sections";
 import {
   Add01Icon,
   AiSparklesIcon,
@@ -43,7 +46,7 @@ import {
 } from "@hugeicons/core-free-icons";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import {
   Card,
   CardAction,
@@ -52,6 +55,13 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyTitle,
+} from "@/components/ui/empty";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -101,7 +111,9 @@ import {
 const EMPTY_ERRORS: FormErrors = { years: {}, figures: {} };
 type Replacement = { type: "load"; id: string } | { type: "new" } | { type: "signout" };
 
-function ManualEntry() {
+function ManualEntry({ section }: { section?: Section }) {
+  const navigate = useNavigate();
+  const pendingReveal = useRef<{ id: string; block: ScrollLogicalPosition } | null>(null);
   const [form, setForm] = useState<FormDraft>(createEmptyForm);
   const [showErrors, setShowErrors] = useState(false);
   const [confirmExample, setConfirmExample] = useState(false);
@@ -215,6 +227,26 @@ function ManualEntry() {
     setWorkspaceError(null);
     setDocumentError(null);
     setNotice(message);
+  }
+
+  function revealPending() {
+    const target = pendingReveal.current;
+    const element = target && document.getElementById(target.id);
+    if (!element) return;
+    pendingReveal.current = null;
+    element.scrollIntoView({ behavior: "smooth", block: target.block });
+    element.focus({ preventScroll: true });
+  }
+  // Targets in another section only exist after navigation renders them.
+  useEffect(revealPending);
+
+  function reveal(id: string, target: Section, block: ScrollLogicalPosition = "center") {
+    pendingReveal.current = { id, block };
+    if (section && section !== target) {
+      void navigate({ to: SECTIONS.find((item) => item.id === target)!.path });
+    } else {
+      requestAnimationFrame(revealPending);
+    }
   }
 
   async function handleAuth(event: FormEvent<HTMLFormElement>) {
@@ -364,9 +396,7 @@ function ManualEntry() {
       setShowErrors(true);
       setNotice(null);
       const target = firstErrorId(nextErrors, form);
-      if (target) {
-        requestAnimationFrame(() => document.getElementById(target)?.focus());
-      }
+      if (target) reveal(target, "figures");
       return;
     }
     actionPending.current = true;
@@ -485,9 +515,7 @@ function ManualEntry() {
     if (activeReview?.id === documentId) {
       setReviewPage(pageNumber);
       setHighlightedCell(cell);
-      requestAnimationFrame(() =>
-        document.getElementById("source-review-panel")?.scrollIntoView({ behavior: "smooth", block: "start" }),
-      );
+      reveal("source-review-panel", "documents", "start");
       return;
     }
     if (actionPending.current) return;
@@ -499,9 +527,7 @@ function ManualEntry() {
       setActiveReview(data);
       setReviewPage(pageNumber);
       setHighlightedCell(cell);
-      requestAnimationFrame(() =>
-        document.getElementById("source-review-panel")?.scrollIntoView({ behavior: "smooth", block: "start" }),
-      );
+      reveal("source-review-panel", "documents", "start");
     } catch (error) {
       setDocumentError(
         error instanceof Error ? error.message : "Could not load extracted candidates.",
@@ -590,14 +616,10 @@ function ManualEntry() {
       setNotice(
         `Add ${financialYearLabel(yearStart!)} in Financial years below to enter ${label} manually.`,
       );
+      reveal("periods-heading", "figures", "start");
       return;
     }
-    const id = `figure-${period.id}-${field}`;
-    requestAnimationFrame(() => {
-      const el = document.getElementById(id);
-      el?.scrollIntoView({ behavior: "smooth", block: "center" });
-      el?.focus();
-    });
+    reveal(`figure-${period.id}-${field}`, "figures");
   }
 
   async function handleDeleteDocument(documentId: string, filename: string) {
@@ -717,9 +739,7 @@ function ManualEntry() {
       const nextErrors = validateForm(form);
       if (nextErrors.figures[`${periodId}:${field}`]) {
         setShowErrors(true);
-        requestAnimationFrame(() =>
-          document.getElementById(`figure-${periodId}-${field}`)?.focus(),
-        );
+        reveal(`figure-${periodId}-${field}`, "figures");
         return;
       }
     }
@@ -849,9 +869,7 @@ function ManualEntry() {
       setShowErrors(true);
       setNotice(null);
       const target = firstErrorId(nextErrors, form);
-      if (target) {
-        requestAnimationFrame(() => document.getElementById(target)?.focus());
-      }
+      if (target) reveal(target, "figures");
       return;
     }
 
@@ -884,7 +902,7 @@ function ManualEntry() {
     setShowErrors(true);
     if (hasErrors(nextErrors)) {
       const target = firstErrorId(nextErrors, form);
-      if (target) requestAnimationFrame(() => document.getElementById(target)?.focus());
+      if (target) reveal(target, "figures");
       return;
     }
     if (session) {
@@ -923,782 +941,813 @@ function ManualEntry() {
     analysis.run();
   }
 
-  return (
-    <main className="min-h-screen bg-muted/30 print:min-h-0 print:bg-white">
-      <fieldset disabled={actionsDisabled} className="mx-auto flex min-w-0 max-w-5xl flex-col gap-6 px-4 py-8 sm:px-6 lg:py-12 print:max-w-none print:p-0" aria-label="Financial health workspace">
-        <div className={activeReport ? "flex flex-col gap-6 print:hidden" : "flex flex-col gap-6"}>
-        <header className="flex flex-wrap items-start justify-between gap-4">
-          <div className="space-y-1">
-            <p className="text-sm font-medium text-primary">CredLens</p>
-            <h1 className="font-heading text-3xl font-semibold tracking-tight sm:text-4xl">
-              Financial health review
-            </h1>
-            <p className="max-w-2xl text-sm text-muted-foreground">
-              Enter one to three completed financial years, check the figures,
-              and confirm them. Sign in to save and reload owner-protected
-              workspaces.
-            </p>
-          </div>
-          <Badge variant={savedClean ? "secondary" : "outline"}>
-            {savedClean
-              ? `Saved · Rev ${activeWorkspace.revision}`
-              : session
-                ? "Unsaved draft"
-                : "Not saved"}
-          </Badge>
-        </header>
+  const show = (id: Section) => !section || section === id;
+  const needsWorkspace =
+    !activeWorkspace && (section === "documents" || section === "report" || section === "qa");
 
-        <Card>
-          <CardHeader>
-            <CardTitle>
-              {session ? "Protected workspace" : "Account and saved workspaces"}
-            </CardTitle>
-            <CardDescription>
-              {session
-                ? `Signed in as ${session.email}. Workspaces and analysis runs are scoped to your account.`
-                : "Sign in or create a local account to save businesses and reload analyses across sessions."}
-            </CardDescription>
-            {session ? (
-              <CardAction>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => requestReplacement({ type: "signout" })}
-                  disabled={authBusy || workspaceBusy}
-                >
-                  Sign out
-                </Button>
-              </CardAction>
-            ) : null}
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {checkingSession ? <p role="status" className="text-sm text-muted-foreground">Checking saved session…</p> : null}
-            {session ? (
-              <div className="space-y-3">
-                <div className="flex flex-wrap items-end gap-3">
-                  <div className="min-w-64 flex-1 space-y-1.5">
-                    <Label htmlFor="workspace-select">Saved businesses</Label>
-                    <Select<string>
-                      disabled={actionsDisabled}
-                      id="workspace-select"
-                      items={businesses.map((item) => ({
-                        value: item.id,
-                        label: `${item.business_name} (Rev ${item.input_revision})`,
-                      }))}
-                      value={activeWorkspace?.id ?? ""}
-                      onValueChange={(value) => {
-                        if (value) requestReplacement({ type: "load", id: value });
-                      }}
-                    >
-                      <SelectTrigger className="w-full">
-                        <SelectValue
-                          placeholder={
-                            businesses.length === 0
-                              ? "No saved businesses yet"
-                              : "Select a saved business"
-                          }
-                        />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {businesses.map((item) => (
-                          <SelectItem key={item.id} value={item.id}>
-                            {item.business_name} (Rev {item.input_revision})
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={handleSaveWorkspace}
-                    disabled={workspaceBusy || savedClean}
-                  >
-                    {workspaceBusy
-                      ? "Saving…"
-                      : savedClean
-                        ? "Workspace saved"
-                        : "Save workspace"}
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    onClick={() => requestReplacement({ type: "new" })}
-                    disabled={workspaceBusy}
-                  >
-                    New workspace
-                  </Button>
-                  {activeWorkspace ? (
+  return (
+    <AppShell
+      section={section}
+      email={session?.email ?? null}
+      status={
+        <Badge variant={savedClean ? "secondary" : "outline"}>
+          {savedClean
+            ? `Saved · Rev ${activeWorkspace.revision}`
+            : session
+              ? "Unsaved draft"
+              : "Not saved"}
+        </Badge>
+      }
+    >
+      <fieldset disabled={actionsDisabled} className="mx-auto flex w-full min-w-0 max-w-5xl flex-col gap-6 print:max-w-none" aria-label="Financial health workspace">
+        <div className={activeReport ? "flex flex-col gap-6 print:hidden" : "flex flex-col gap-6"}>
+        {notice ? (
+          <p
+            role="status"
+            aria-live="polite"
+            className="text-sm font-medium text-foreground"
+          >
+            {notice}
+          </p>
+        ) : null}
+
+        {workspaceError ? (
+          <Alert variant="destructive">
+            <HugeiconsIcon icon={Alert02Icon} />
+            <AlertTitle>Workspace action failed</AlertTitle>
+            <AlertDescription className="col-start-2">
+              {workspaceError}
+            </AlertDescription>
+          </Alert>
+        ) : null}
+
+        {needsWorkspace ? (
+          <Empty className="border border-dashed border-border">
+            <EmptyHeader>
+              <EmptyTitle>No saved workspace</EmptyTitle>
+              <EmptyDescription>
+                {section === "documents"
+                  ? "Sign in and save a workspace to upload PDF statements."
+                  : section === "report"
+                    ? "Sign in and save a workspace to generate preparation reports."
+                    : "Sign in and save a workspace to ask questions about its evidence."}
+              </EmptyDescription>
+            </EmptyHeader>
+            <EmptyContent>
+              <Link to="/" className={buttonVariants({ variant: "outline" })}>
+                Go to Overview
+              </Link>
+            </EmptyContent>
+          </Empty>
+        ) : null}
+
+        {show("overview") ? (
+          <>
+            <Card>
+              <CardHeader>
+                <CardTitle>
+                  {session ? "Protected workspace" : "Account and saved workspaces"}
+                </CardTitle>
+                <CardDescription>
+                  {session
+                    ? `Signed in as ${session.email}. Workspaces and analysis runs are scoped to your account.`
+                    : "Sign in or create a local account to save businesses and reload analyses across sessions."}
+                </CardDescription>
+                {session ? (
+                  <CardAction>
                     <Button
                       type="button"
                       variant="outline"
-                      onClick={() => {
-                        setConfirmDeleteWorkspace(true);
-                        setReplacement(null);
-                      }}
-                      disabled={workspaceBusy || documentBusy}
+                      size="sm"
+                      onClick={() => requestReplacement({ type: "signout" })}
+                      disabled={authBusy || workspaceBusy}
                     >
-                      Delete workspace
+                      Sign out
                     </Button>
-                  ) : null}
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => void handleToggleAuditLog()}
-                    disabled={workspaceBusy || auditLoading}
-                  >
-                    {auditOpen ? "Hide activity log" : "Activity log"}
-                  </Button>
-                </div>
-                {confirmDeleteWorkspace && activeWorkspace ? (
-                  <div
-                    role="group"
-                    aria-label="Delete workspace permanently?"
-                    className="space-y-2 rounded-lg border border-destructive/40 bg-muted/50 p-3 text-sm"
-                  >
-                    <p className="font-medium text-destructive">
-                      Delete &ldquo;{activeWorkspace.form.businessName}&rdquo; and all active data?
-                    </p>
-                    <p className="text-muted-foreground">
-                      This immediately removes saved figures, revision history, uploaded PDFs, extraction snapshots, retrieval chunks/embeddings, analysis runs, preparation reports, and in-session Q&amp;A answers.
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      Backup limitation: external PostgreSQL host backups or point-in-time recovery snapshots follow database-host retention policies and are not immediately purged.
-                    </p>
-                    <div className="flex flex-wrap gap-2 pt-1">
-                      <Button
-                        type="button"
-                        variant="destructive"
-                        size="sm"
-                        disabled={workspaceBusy}
-                        onClick={() => void handleDeleteWorkspace()}
-                      >
-                        Delete workspace permanently
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        disabled={workspaceBusy}
-                        onClick={() => setConfirmDeleteWorkspace(false)}
-                      >
-                        Cancel
-                      </Button>
-                    </div>
-                  </div>
+                  </CardAction>
                 ) : null}
-                {auditOpen ? (
-                  <div className="space-y-2 rounded-lg border border-border p-3 text-xs">
-                    <div className="flex items-center justify-between gap-2">
-                      <p className="font-medium text-foreground">
-                        Recent activity (minimal audit log · actor, action, time · no financial payloads)
-                      </p>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="xs"
-                        disabled={auditLoading}
-                        onClick={async () => {
-                          setAuditLoading(true);
-                          setAuditError(null);
-                          try {
-                            setAuditEvents(await fetchAuditEvents());
-                          } catch (error) {
-                            setAuditError(
-                              error instanceof Error
-                                ? error.message
-                                : "Could not load activity log.",
-                            );
-                          } finally {
-                            setAuditLoading(false);
-                          }
-                        }}
-                      >
-                        {auditLoading ? "Loading…" : "Refresh log"}
-                      </Button>
-                    </div>
-                    {auditError ? (
-                      <p role="alert" className="text-destructive">
-                        {auditError}
-                      </p>
-                    ) : auditEvents.length === 0 ? (
-                      <p className="text-muted-foreground">
-                        {auditLoading
-                          ? "Loading activity log…"
-                          : "No activity recorded yet."}
-                      </p>
-                    ) : (
-                      <ul className="space-y-1.5">
-                        {auditEvents.slice(0, 15).map((event) => (
-                          <li
-                            key={event.id}
-                            className="flex flex-wrap items-center justify-between gap-2 border-t border-border/50 pt-1.5"
-                          >
-                            <span className="font-mono text-foreground">
-                              {event.action} · {event.resource_type}
-                              {event.details
-                                ? ` (${Object.entries(event.details)
-                                    .map(([k, v]) => `${k}=${String(v)}`)
-                                    .join(", ")})`
-                                : ""}
-                            </span>
-                            <span className="text-muted-foreground">
-                              {event.created_at}
-                            </span>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
-                ) : null}
-                {replacement ? (
-                  <div role="group" aria-label="Discard unsaved entries?" className="rounded-lg border border-border bg-muted/50 p-3">
-                    <p className="text-sm font-medium">Discard unsaved entries?</p>
-                    <p className="mt-1 text-sm text-muted-foreground">Continuing will replace your current draft. Save it first if you want to keep it.</p>
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      <Button type="button" variant="destructive" size="sm" onClick={() => replaceDraft(replacement)}>Discard and continue</Button>
-                      <Button type="button" variant="outline" size="sm" onClick={() => setReplacement(null)}>Keep editing</Button>
-                    </div>
-                  </div>
-                ) : null}
-                {workspaceError ? (
-                  <Alert variant="destructive">
-                    <HugeiconsIcon icon={Alert02Icon} />
-                    <AlertTitle>Workspace action failed</AlertTitle>
-                    <AlertDescription className="col-start-2">
-                      {workspaceError}
-                    </AlertDescription>
-                  </Alert>
-                ) : null}
-              </div>
-            ) : (
-              <form onSubmit={handleAuth} className="space-y-4">
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <div className="space-y-1.5">
-                    <Label htmlFor="auth-email">Email</Label>
-                    <Input
-                      id="auth-email"
-                      type="email"
-                      value={email}
-                      onChange={(event) => setEmail(event.target.value)}
-                      autoComplete="email"
-                      required
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label htmlFor="auth-password">Password</Label>
-                    <Input
-                      id="auth-password"
-                      type="password"
-                      value={password}
-                      onChange={(event) => setPassword(event.target.value)}
-                      autoComplete={
-                        authMode === "register"
-                          ? "new-password"
-                          : "current-password"
-                      }
-                      minLength={12}
-                      maxLength={128}
-                      required
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      Use 12 to 128 characters.
-                    </p>
-                  </div>
-                </div>
-                {authError ? (
-                  <p role="alert" className="text-sm text-destructive">
-                    {authError}
-                  </p>
-                ) : null}
-                <div className="flex flex-wrap items-center gap-2">
-                  <Button type="submit" size="sm" disabled={authBusy}>
-                    {authBusy
-                      ? "Submitting…"
-                      : authMode === "register"
-                        ? "Create account"
-                        : "Sign in"}
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => {
-                      setAuthMode((current) =>
-                        current === "login" ? "register" : "login",
-                      );
-                      setAuthError(null);
-                    }}
-                  >
-                    {authMode === "login"
-                      ? "Need an account? Create one"
-                      : "Already have an account? Sign in"}
-                  </Button>
-                </div>
-              </form>
-            )}
-          </CardContent>
-        </Card>
-
-        {session && activeWorkspace ? (
-          <Card>
-            <CardHeader>
-              <CardTitle>Source PDF documents</CardTitle>
-              <CardDescription>
-                Upload digital financial statement PDFs for &ldquo;{activeWorkspace.form.businessName}&rdquo;. Maximum 20 MB and 50 pages per PDF; one processing job runs at a time. Scanned or image-only PDFs are rejected.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="flex flex-wrap items-end gap-3">
-                <div className="min-w-64 flex-1 space-y-1.5">
-                  <Label htmlFor="pdf-upload-input">Financial statement PDF</Label>
-                  <Input
-                    ref={fileInputRef}
-                    id="pdf-upload-input"
-                    type="file"
-                    accept=".pdf,application/pdf"
-                    disabled={actionsDisabled}
-                    onChange={(event) => {
-                      const nextFile = event.target.files?.[0] ?? null;
-                      setSelectedPdf(nextFile);
-                      setDocumentError(null);
-                    }}
-                  />
-                </div>
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => void handleUploadDocument()}
-                  disabled={actionsDisabled || !selectedPdf}
-                >
-                  {documentBusy ? "Processing PDF…" : "Upload PDF"}
-                </Button>
-                <Button type="button" variant="outline" disabled={actionsDisabled} onClick={() => void handleRefreshDocuments()}>
-                  Refresh document status
-                </Button>
-              </div>
-              {documentError ? (
-                <Alert variant="destructive">
-                  <HugeiconsIcon icon={Alert02Icon} />
-                  <AlertTitle>PDF upload or processing failed</AlertTitle>
-                  <AlertDescription className="col-start-2">
-                    {documentError} Refresh document status before retrying an interrupted request.
-                  </AlertDescription>
-                </Alert>
-              ) : null}
-              {activeWorkspace.documents.length > 0 ? (
-                <ul className="divide-y divide-border rounded-lg border border-border" aria-label="Uploaded PDF documents">
-                  {activeWorkspace.documents.map((doc) => (
-                    <li
-                      key={doc.id}
-                      className="flex flex-wrap items-center justify-between gap-3 p-3 text-sm"
-                    >
-                      <div className="space-y-1">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="font-medium">{doc.filename}</span>
-                          <Badge
-                            variant={
-                              doc.status === "ready"
-                                ? "secondary"
-                                : doc.status === "failed"
-                                  ? "destructive"
-                                  : "outline"
-                            }
-                          >
-                            {doc.status === "ready"
-                              ? "Ready"
-                              : doc.status === "failed"
-                                ? "Failed"
-                                : "Processing"}
-                          </Badge>
-                        </div>
-                        <p className="text-xs text-muted-foreground">
-                          {Math.max(1, Math.round(doc.byte_size / 1024))} KB
-                          {doc.page_count !== null
-                            ? ` · ${doc.page_count} ${doc.page_count === 1 ? "page" : "pages"}`
-                            : ""}
-                          {doc.extracted_char_count !== null
-                            ? ` · ${doc.extracted_char_count} digital chars`
-                            : ""}
-                        </p>
-                        {doc.error_message ? (
-                          <p className="text-xs text-destructive">
-                            {doc.error_message}
-                          </p>
-                        ) : null}
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {checkingSession ? <p role="status" className="text-sm text-muted-foreground">Checking saved session…</p> : null}
+                {session ? (
+                  <div className="space-y-3">
+                    <div className="flex flex-wrap items-end gap-3">
+                      <div className="min-w-64 flex-1 space-y-1.5">
+                        <Label htmlFor="workspace-select">Saved businesses</Label>
+                        <Select<string>
+                          disabled={actionsDisabled}
+                          id="workspace-select"
+                          items={businesses.map((item) => ({
+                            value: item.id,
+                            label: `${item.business_name} (Rev ${item.input_revision})`,
+                          }))}
+                          value={activeWorkspace?.id ?? ""}
+                          onValueChange={(value) => {
+                            if (value) requestReplacement({ type: "load", id: value });
+                          }}
+                        >
+                          <SelectTrigger className="w-full">
+                            <SelectValue
+                              placeholder={
+                                businesses.length === 0
+                                  ? "No saved businesses yet"
+                                  : "Select a saved business"
+                              }
+                            />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {businesses.map((item) => (
+                              <SelectItem key={item.id} value={item.id}>
+                                {item.business_name} (Rev {item.input_revision})
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
                       </div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        {doc.status === "ready" ? (
-                          <>
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="sm"
-                              disabled={actionsDisabled}
-                              onClick={() => void handleOpenReview(doc.id)}
-                            >
-                              {activeReview?.id === doc.id
-                                ? "Reviewing"
-                                : "Review extracted figures"}
-                            </Button>
-                            <a
-                              href={documentFileUrl(activeWorkspace.id, doc.id)}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="text-xs font-medium text-primary underline-offset-4 hover:underline"
-                            >
-                              View PDF
-                            </a>
-                          </>
-                        ) : null}
-                        {doc.status === "failed" && doc.error_code !== "deletion_pending" ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={handleSaveWorkspace}
+                        disabled={workspaceBusy || savedClean}
+                      >
+                        {workspaceBusy
+                          ? "Saving…"
+                          : savedClean
+                            ? "Workspace saved"
+                            : "Save workspace"}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        onClick={() => requestReplacement({ type: "new" })}
+                        disabled={workspaceBusy}
+                      >
+                        New workspace
+                      </Button>
+                      {activeWorkspace ? (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={() => {
+                            setConfirmDeleteWorkspace(true);
+                            setReplacement(null);
+                          }}
+                          disabled={workspaceBusy || documentBusy}
+                        >
+                          Delete workspace
+                        </Button>
+                      ) : null}
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => void handleToggleAuditLog()}
+                        disabled={workspaceBusy || auditLoading}
+                      >
+                        {auditOpen ? "Hide activity log" : "Activity log"}
+                      </Button>
+                    </div>
+                    {confirmDeleteWorkspace && activeWorkspace ? (
+                      <div
+                        role="group"
+                        aria-label="Delete workspace permanently?"
+                        className="space-y-2 rounded-lg border border-destructive/40 bg-muted/50 p-3 text-sm"
+                      >
+                        <p className="font-medium text-destructive">
+                          Delete &ldquo;{activeWorkspace.form.businessName}&rdquo; and all active data?
+                        </p>
+                        <p className="text-muted-foreground">
+                          This immediately removes saved figures, revision history, uploaded PDFs, extraction snapshots, retrieval chunks/embeddings, analysis runs, preparation reports, and in-session Q&amp;A answers.
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          Backup limitation: external PostgreSQL host backups or point-in-time recovery snapshots follow database-host retention policies and are not immediately purged.
+                        </p>
+                        <div className="flex flex-wrap gap-2 pt-1">
+                          <Button
+                            type="button"
+                            variant="destructive"
+                            size="sm"
+                            disabled={workspaceBusy}
+                            onClick={() => void handleDeleteWorkspace()}
+                          >
+                            Delete workspace permanently
+                          </Button>
                           <Button
                             type="button"
                             variant="outline"
                             size="sm"
-                            disabled={actionsDisabled}
-                            onClick={() => void handleRetryDocument(doc.id)}
+                            disabled={workspaceBusy}
+                            onClick={() => setConfirmDeleteWorkspace(false)}
                           >
-                            Retry processing
+                            Cancel
                           </Button>
-                        ) : null}
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          disabled={actionsDisabled}
-                          onClick={() => void handleDeleteDocument(doc.id, doc.filename)}
-                        >
-                          Remove
-                        </Button>
+                        </div>
                       </div>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="text-xs text-muted-foreground">
-                  No PDFs uploaded for this workspace yet.
-                </p>
-              )}
-            </CardContent>
-          </Card>
+                    ) : null}
+                    {auditOpen ? (
+                      <div className="space-y-2 rounded-lg border border-border p-3 text-xs">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="font-medium text-foreground">
+                            Recent activity (minimal audit log · actor, action, time · no financial payloads)
+                          </p>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="xs"
+                            disabled={auditLoading}
+                            onClick={async () => {
+                              setAuditLoading(true);
+                              setAuditError(null);
+                              try {
+                                setAuditEvents(await fetchAuditEvents());
+                              } catch (error) {
+                                setAuditError(
+                                  error instanceof Error
+                                    ? error.message
+                                    : "Could not load activity log.",
+                                );
+                              } finally {
+                                setAuditLoading(false);
+                              }
+                            }}
+                          >
+                            {auditLoading ? "Loading…" : "Refresh log"}
+                          </Button>
+                        </div>
+                        {auditError ? (
+                          <p role="alert" className="text-destructive">
+                            {auditError}
+                          </p>
+                        ) : auditEvents.length === 0 ? (
+                          <p className="text-muted-foreground">
+                            {auditLoading
+                              ? "Loading activity log…"
+                              : "No activity recorded yet."}
+                          </p>
+                        ) : (
+                          <ul className="space-y-1.5">
+                            {auditEvents.slice(0, 15).map((event) => (
+                              <li
+                                key={event.id}
+                                className="flex flex-wrap items-center justify-between gap-2 border-t border-border/50 pt-1.5"
+                              >
+                                <span className="font-mono text-foreground">
+                                  {event.action} · {event.resource_type}
+                                  {event.details
+                                    ? ` (${Object.entries(event.details)
+                                        .map(([k, v]) => `${k}=${String(v)}`)
+                                        .join(", ")})`
+                                    : ""}
+                                </span>
+                                <span className="text-muted-foreground">
+                                  {event.created_at}
+                                </span>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+                    ) : null}
+                    {replacement ? (
+                      <div role="group" aria-label="Discard unsaved entries?" className="rounded-lg border border-border bg-muted/50 p-3">
+                        <p className="text-sm font-medium">Discard unsaved entries?</p>
+                        <p className="mt-1 text-sm text-muted-foreground">Continuing will replace your current draft. Save it first if you want to keep it.</p>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <Button type="button" variant="destructive" size="sm" onClick={() => replaceDraft(replacement)}>Discard and continue</Button>
+                          <Button type="button" variant="outline" size="sm" onClick={() => setReplacement(null)}>Keep editing</Button>
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : (
+                  <form onSubmit={handleAuth} className="space-y-4">
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <div className="space-y-1.5">
+                        <Label htmlFor="auth-email">Email</Label>
+                        <Input
+                          id="auth-email"
+                          type="email"
+                          value={email}
+                          onChange={(event) => setEmail(event.target.value)}
+                          autoComplete="email"
+                          required
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label htmlFor="auth-password">Password</Label>
+                        <Input
+                          id="auth-password"
+                          type="password"
+                          value={password}
+                          onChange={(event) => setPassword(event.target.value)}
+                          autoComplete={
+                            authMode === "register"
+                              ? "new-password"
+                              : "current-password"
+                          }
+                          minLength={12}
+                          maxLength={128}
+                          required
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          Use 12 to 128 characters.
+                        </p>
+                      </div>
+                    </div>
+                    {authError ? (
+                      <p role="alert" className="text-sm text-destructive">
+                        {authError}
+                      </p>
+                    ) : null}
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Button type="submit" size="sm" disabled={authBusy}>
+                        {authBusy
+                          ? "Submitting…"
+                          : authMode === "register"
+                            ? "Create account"
+                            : "Sign in"}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          setAuthMode((current) =>
+                            current === "login" ? "register" : "login",
+                          );
+                          setAuthError(null);
+                        }}
+                      >
+                        {authMode === "login"
+                          ? "Need an account? Create one"
+                          : "Already have an account? Sign in"}
+                      </Button>
+                    </div>
+                  </form>
+                )}
+              </CardContent>
+            </Card>
+
+            {!session ? (
+              <Alert role="status">
+                <HugeiconsIcon icon={InformationCircleIcon} />
+                <AlertTitle>Prototype data is not saved</AlertTitle>
+                <AlertDescription className="col-start-2">
+                  Without signing in, reloading the page clears every entry. Use
+                  fictional data until private-data protection is verified. Figures
+                  are confirmed manually and are not authenticated.
+                </AlertDescription>
+              </Alert>
+            ) : null}
+          </>
         ) : null}
 
-        {session && activeWorkspace && activeReview ? (
-          <SourceReview
-            key={activeReview.id}
-            businessId={activeWorkspace.id}
-            extraction={activeReview}
-            activePage={reviewPage}
-            highlightedCell={highlightedCell}
-            disabled={actionsDisabled}
-            form={form}
-            onSelectPage={(page) => setReviewPage(page)}
-            onHighlightCell={(cell) => setHighlightedCell(cell)}
-            onRunExtraction={(docId) => void handleRunExtraction(docId)}
-            onApplyCandidates={handleApplyCandidates}
-            onJumpToField={handleJumpToField}
-            onClose={() => {
-              setActiveReview(null);
-              setHighlightedCell(null);
-            }}
-          />
-        ) : null}
-
-        {applyWarnings.length > 0 ? (
-          <Alert>
-            <HugeiconsIcon icon={Alert02Icon} />
-            <AlertTitle>Some PDF candidates were not applied</AlertTitle>
-            <AlertDescription className="col-start-2">
-              <ul className="list-disc space-y-1 pl-4">
-                {applyWarnings.map((warning, idx) => (
-                  <li key={idx}>{warning}</li>
-                ))}
-              </ul>
-            </AlertDescription>
-          </Alert>
-        ) : null}
-
-        {!session ? (
-          <Alert role="status">
-            <HugeiconsIcon icon={InformationCircleIcon} />
-            <AlertTitle>Prototype data is not saved</AlertTitle>
-            <AlertDescription className="col-start-2">
-              Without signing in, reloading the page clears every entry. Use
-              fictional data until private-data protection is verified. Figures
-              are confirmed manually and are not authenticated.
-            </AlertDescription>
-          </Alert>
-        ) : null}
-
-
-        {showErrors && hasErrors(errors) ? (
-          <Alert variant="destructive">
-            <HugeiconsIcon icon={Alert02Icon} />
-            <AlertTitle>Check the highlighted fields</AlertTitle>
-            <AlertDescription className="col-start-2">
-              Your entries are kept. Fix the fields marked below, then confirm
-              again.
-            </AlertDescription>
-          </Alert>
-        ) : null}
-
-        <form onSubmit={handleSubmit} className="flex flex-col gap-6">
-          <Card>
-            <CardHeader>
-              <CardTitle>Start with a fictional example</CardTitle>
-              <CardDescription>
-                Aster Components (fictional) · FY 2023-24 and FY 2024-25 · INR
-                rupees. Example only; not a real business or lending benchmark.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <Button type="button" variant="outline" onClick={loadExample}>
-                <HugeiconsIcon icon={AiSparklesIcon} data-icon="inline-start" />
-                Load fictional example
-              </Button>
-              <p className="text-xs text-muted-foreground">
-                Loading replaces current entries after confirmation. Example
-                figures start unreviewed.
-              </p>
-              {confirmExample ? (
-                <div className="rounded-lg border border-border bg-muted/50 p-3">
-                  <p className="text-sm font-medium">Replace current entries?</p>
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    This will replace the business name, years, units, and figures
-                    you have entered.
-                  </p>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    <Button
-                      type="button"
-                      variant="destructive"
-                      size="sm"
-                      onClick={applyExample}
-                    >
-                      Replace entries
-                    </Button>
+        {show("documents") ? (
+          <>
+            {session && activeWorkspace ? (
+              <Card>
+                <CardHeader>
+                  <CardTitle>Source PDF documents</CardTitle>
+                  <CardDescription>
+                    Upload digital financial statement PDFs for &ldquo;{activeWorkspace.form.businessName}&rdquo;. Maximum 20 MB and 50 pages per PDF; one processing job runs at a time. Scanned or image-only PDFs are rejected.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="flex flex-wrap items-end gap-3">
+                    <div className="min-w-64 flex-1 space-y-1.5">
+                      <Label htmlFor="pdf-upload-input">Financial statement PDF</Label>
+                      <Input
+                        ref={fileInputRef}
+                        id="pdf-upload-input"
+                        type="file"
+                        accept=".pdf,application/pdf"
+                        disabled={actionsDisabled}
+                        onChange={(event) => {
+                          const nextFile = event.target.files?.[0] ?? null;
+                          setSelectedPdf(nextFile);
+                          setDocumentError(null);
+                        }}
+                      />
+                    </div>
                     <Button
                       type="button"
                       variant="outline"
-                      size="sm"
-                      onClick={() => setConfirmExample(false)}
+                      onClick={() => void handleUploadDocument()}
+                      disabled={actionsDisabled || !selectedPdf}
                     >
-                      Cancel
+                      {documentBusy ? "Processing PDF…" : "Upload PDF"}
+                    </Button>
+                    <Button type="button" variant="outline" disabled={actionsDisabled} onClick={() => void handleRefreshDocuments()}>
+                      Refresh document status
                     </Button>
                   </div>
-                </div>
-              ) : null}
-            </CardContent>
-          </Card>
+                  {documentError ? (
+                    <Alert variant="destructive">
+                      <HugeiconsIcon icon={Alert02Icon} />
+                      <AlertTitle>PDF upload or processing failed</AlertTitle>
+                      <AlertDescription className="col-start-2">
+                        {documentError} Refresh document status before retrying an interrupted request.
+                      </AlertDescription>
+                    </Alert>
+                  ) : null}
+                  {activeWorkspace.documents.length > 0 ? (
+                    <ul className="divide-y divide-border rounded-lg border border-border" aria-label="Uploaded PDF documents">
+                      {activeWorkspace.documents.map((doc) => (
+                        <li
+                          key={doc.id}
+                          className="flex flex-wrap items-center justify-between gap-3 p-3 text-sm"
+                        >
+                          <div className="space-y-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="font-medium">{doc.filename}</span>
+                              <Badge
+                                variant={
+                                  doc.status === "ready"
+                                    ? "secondary"
+                                    : doc.status === "failed"
+                                      ? "destructive"
+                                      : "outline"
+                                }
+                              >
+                                {doc.status === "ready"
+                                  ? "Ready"
+                                  : doc.status === "failed"
+                                    ? "Failed"
+                                    : "Processing"}
+                              </Badge>
+                            </div>
+                            <p className="text-xs text-muted-foreground">
+                              {Math.max(1, Math.round(doc.byte_size / 1024))} KB
+                              {doc.page_count !== null
+                                ? ` · ${doc.page_count} ${doc.page_count === 1 ? "page" : "pages"}`
+                                : ""}
+                              {doc.extracted_char_count !== null
+                                ? ` · ${doc.extracted_char_count} digital chars`
+                                : ""}
+                            </p>
+                            {doc.error_message ? (
+                              <p className="text-xs text-destructive">
+                                {doc.error_message}
+                              </p>
+                            ) : null}
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            {doc.status === "ready" ? (
+                              <>
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  disabled={actionsDisabled}
+                                  onClick={() => void handleOpenReview(doc.id)}
+                                >
+                                  {activeReview?.id === doc.id
+                                    ? "Reviewing"
+                                    : "Review extracted figures"}
+                                </Button>
+                                <a
+                                  href={documentFileUrl(activeWorkspace.id, doc.id)}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="text-xs font-medium text-primary underline-offset-4 hover:underline"
+                                >
+                                  View PDF
+                                </a>
+                              </>
+                            ) : null}
+                            {doc.status === "failed" && doc.error_code !== "deletion_pending" ? (
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                disabled={actionsDisabled}
+                                onClick={() => void handleRetryDocument(doc.id)}
+                              >
+                                Retry processing
+                              </Button>
+                            ) : null}
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              disabled={actionsDisabled}
+                              onClick={() => void handleDeleteDocument(doc.id, doc.filename)}
+                            >
+                              Remove
+                            </Button>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">
+                      No PDFs uploaded for this workspace yet.
+                    </p>
+                  )}
+                </CardContent>
+              </Card>
+            ) : null}
 
-          <Card>
-            <CardHeader>
-              <CardTitle>Business details</CardTitle>
-              <CardDescription>
-                Currency INR · Standalone basis · April–March financial years
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="max-w-md space-y-2">
-                <Label htmlFor="business-name">Business name</Label>
-                <Input
-                  id="business-name"
-                  value={form.businessName}
-                  onChange={(event) => updateBusinessName(event.target.value)}
-                  maxLength={120}
-                  autoComplete="organization"
-                  aria-invalid={errors.businessName ? true : undefined}
-                  aria-describedby={
-                    errors.businessName ? "business-name-error" : undefined
-                  }
-                />
-                {errors.businessName ? (
-                  <p id="business-name-error" className="text-sm text-destructive">
-                    {errors.businessName}
-                  </p>
-                ) : (
-                  <p className="text-xs text-muted-foreground">
-                    The name is context only; it is not used in any calculation.
-                  </p>
-                )}
-              </div>
-            </CardContent>
-          </Card>
-
-          <section className="space-y-4" aria-labelledby="periods-heading">
-            <div className="flex flex-wrap items-end justify-between gap-3">
-              <div className="space-y-1">
-                <h2
-                  id="periods-heading"
-                  className="font-heading text-2xl font-semibold"
-                >
-                  Financial years
-                </h2>
-                <p className="text-sm text-muted-foreground">
-                  Add one to three completed years. Leave any figure blank if it
-                  is missing.
-                </p>
-              </div>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={addPeriod}
-                disabled={form.periods.length >= 3}
-              >
-                <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
-                Add year
-              </Button>
-            </div>
-
-            {periods.map((period) => (
-              <PeriodCard
-                key={period.id}
-                businessId={activeWorkspace?.id}
-                period={period}
-                periods={form.periods}
-                errors={errors}
-                canRemove={form.periods.length > 1}
+            {session && activeWorkspace && activeReview ? (
+              <SourceReview
+                key={activeReview.id}
+                businessId={activeWorkspace.id}
+                extraction={activeReview}
+                activePage={reviewPage}
+                highlightedCell={highlightedCell}
                 disabled={actionsDisabled}
-                onRemove={() => removePeriod(period.id)}
-                onYearChange={(yearStart) =>
-                  updatePeriodYear(period.id, yearStart)
-                }
-                onUnitChange={(unit) => updatePeriodUnit(period.id, unit)}
-                onComparableChange={(checked) =>
-                  updateComparable(period.id, checked)
-                }
-                onFigureChange={(field, raw) =>
-                  updateFigure(period.id, field, raw)
-                }
-                onToggleFigureReview={(field, checked) =>
-                  toggleFigureReview(period.id, field, checked)
-                }
-                onInspectSource={(source) => {
-                  if (!source.document_id) return;
-                  void handleOpenReview(source.document_id, source.page_number, {
-                    page: source.page_number,
-                    table: source.table_index,
-                    row: source.row_index,
-                    col: source.column_index,
-                  });
+                form={form}
+                onSelectPage={(page) => setReviewPage(page)}
+                onHighlightCell={(cell) => setHighlightedCell(cell)}
+                onRunExtraction={(docId) => void handleRunExtraction(docId)}
+                onApplyCandidates={handleApplyCandidates}
+                onJumpToField={handleJumpToField}
+                onClose={() => {
+                  setActiveReview(null);
+                  setHighlightedCell(null);
                 }}
               />
-            ))}
-          </section>
+            ) : null}
 
-          <Card>
-            <CardHeader>
-              <CardTitle>Review and confirm</CardTitle>
-              <CardDescription>
-                Check the business, year, unit, and entered amounts. Confirmation
-                means you checked the entry; it does not authenticate the figures.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm">
-                <p>
-                  <span className="font-medium">Business:</span>{" "}
-                  {form.businessName.trim() || "Not entered"}
-                </p>
-                <p className="text-muted-foreground">
-                  INR · Standalone basis · April–March years
-                </p>
-              </div>
+            {applyWarnings.length > 0 ? (
+              <Alert>
+                <HugeiconsIcon icon={Alert02Icon} />
+                <AlertTitle>Some PDF candidates were not applied</AlertTitle>
+                <AlertDescription className="col-start-2">
+                  <ul className="list-disc space-y-1 pl-4">
+                    {applyWarnings.map((warning, idx) => (
+                      <li key={idx}>{warning}</li>
+                    ))}
+                  </ul>
+                </AlertDescription>
+              </Alert>
+            ) : null}
+          </>
+        ) : null}
 
-              {periods.map((period) => (
-                <ReviewPeriod key={period.id} period={period} />
-              ))}
+        {show("figures") ? (
+          <>
+            {showErrors && hasErrors(errors) ? (
+              <Alert variant="destructive">
+                <HugeiconsIcon icon={Alert02Icon} />
+                <AlertTitle>Check the highlighted fields</AlertTitle>
+                <AlertDescription className="col-start-2">
+                  Your entries are kept. Fix the fields marked below, then confirm
+                  again.
+                </AlertDescription>
+              </Alert>
+            ) : null}
 
-              <div className="flex flex-wrap items-center gap-3 border-t border-border pt-4">
-                <Button
-                  type="submit"
-                  disabled={counts.present === 0 || allPresentReviewed}
-                >
-                  <HugeiconsIcon
-                    icon={CheckmarkCircle02Icon}
-                    data-icon="inline-start"
+            <form onSubmit={handleSubmit} className="flex flex-col gap-6">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Start with a fictional example</CardTitle>
+                  <CardDescription>
+                    Aster Components (fictional) · FY 2023-24 and FY 2024-25 · INR
+                    rupees. Example only; not a real business or lending benchmark.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <Button type="button" variant="outline" onClick={loadExample}>
+                    <HugeiconsIcon icon={AiSparklesIcon} data-icon="inline-start" />
+                    Load fictional example
+                  </Button>
+                  <p className="text-xs text-muted-foreground">
+                    Loading replaces current entries after confirmation. Example
+                    figures start unreviewed.
+                  </p>
+                  {confirmExample ? (
+                    <div className="rounded-lg border border-border bg-muted/50 p-3">
+                      <p className="text-sm font-medium">Replace current entries?</p>
+                      <p className="mt-1 text-sm text-muted-foreground">
+                        This will replace the business name, years, units, and figures
+                        you have entered.
+                      </p>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <Button
+                          type="button"
+                          variant="destructive"
+                          size="sm"
+                          onClick={applyExample}
+                        >
+                          Replace entries
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setConfirmExample(false)}
+                        >
+                          Cancel
+                        </Button>
+                      </div>
+                    </div>
+                  ) : null}
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>Business details</CardTitle>
+                  <CardDescription>
+                    Currency INR · Standalone basis · April–March financial years
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="max-w-md space-y-2">
+                    <Label htmlFor="business-name">Business name</Label>
+                    <Input
+                      id="business-name"
+                      value={form.businessName}
+                      onChange={(event) => updateBusinessName(event.target.value)}
+                      maxLength={120}
+                      autoComplete="organization"
+                      aria-invalid={errors.businessName ? true : undefined}
+                      aria-describedby={
+                        errors.businessName ? "business-name-error" : undefined
+                      }
+                    />
+                    {errors.businessName ? (
+                      <p id="business-name-error" className="text-sm text-destructive">
+                        {errors.businessName}
+                      </p>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">
+                        The name is context only; it is not used in any calculation.
+                      </p>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+
+              <section className="space-y-4" aria-labelledby="periods-heading">
+                <div className="flex flex-wrap items-end justify-between gap-3">
+                  <div className="space-y-1">
+                    <h2
+                      id="periods-heading"
+                      className="font-heading text-2xl font-semibold"
+                    >
+                      Financial years
+                    </h2>
+                    <p className="text-sm text-muted-foreground">
+                      Add one to three completed years. Leave any figure blank if it
+                      is missing.
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={addPeriod}
+                    disabled={form.periods.length >= 3}
+                  >
+                    <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
+                    Add year
+                  </Button>
+                </div>
+
+                {periods.map((period) => (
+                  <PeriodCard
+                    key={period.id}
+                    businessId={activeWorkspace?.id}
+                    period={period}
+                    periods={form.periods}
+                    errors={errors}
+                    canRemove={form.periods.length > 1}
+                    disabled={actionsDisabled}
+                    onRemove={() => removePeriod(period.id)}
+                    onYearChange={(yearStart) =>
+                      updatePeriodYear(period.id, yearStart)
+                    }
+                    onUnitChange={(unit) => updatePeriodUnit(period.id, unit)}
+                    onComparableChange={(checked) =>
+                      updateComparable(period.id, checked)
+                    }
+                    onFigureChange={(field, raw) =>
+                      updateFigure(period.id, field, raw)
+                    }
+                    onToggleFigureReview={(field, checked) =>
+                      toggleFigureReview(period.id, field, checked)
+                    }
+                    onInspectSource={(source) => {
+                      if (!source.document_id) return;
+                      void handleOpenReview(source.document_id, source.page_number, {
+                        page: source.page_number,
+                        table: source.table_index,
+                        row: source.row_index,
+                        col: source.column_index,
+                      });
+                    }}
                   />
-                  Confirm present figures
-                </Button>
-                <p className="text-sm text-muted-foreground">
-                  {counts.present === 0
-                    ? "No figures entered yet."
-                    : `${counts.reviewed} of ${counts.present} present figures confirmed.`}
-                </p>
-              </div>
+                ))}
+              </section>
 
-              {notice ? (
-                <p
-                  role="status"
-                  aria-live="polite"
-                  className="text-sm font-medium text-foreground"
-                >
-                  {notice}
-                </p>
+              <Card>
+                <CardHeader>
+                  <CardTitle>Review and confirm</CardTitle>
+                  <CardDescription>
+                    Check the business, year, unit, and entered amounts. Confirmation
+                    means you checked the entry; it does not authenticate the figures.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm">
+                    <p>
+                      <span className="font-medium">Business:</span>{" "}
+                      {form.businessName.trim() || "Not entered"}
+                    </p>
+                    <p className="text-muted-foreground">
+                      INR · Standalone basis · April–March years
+                    </p>
+                  </div>
+
+                  {periods.map((period) => (
+                    <ReviewPeriod key={period.id} period={period} />
+                  ))}
+
+                  <div className="flex flex-wrap items-center gap-3 border-t border-border pt-4">
+                    <Button
+                      type="submit"
+                      disabled={counts.present === 0 || allPresentReviewed}
+                    >
+                      <HugeiconsIcon
+                        icon={CheckmarkCircle02Icon}
+                        data-icon="inline-start"
+                      />
+                      Confirm present figures
+                    </Button>
+                    <p className="text-sm text-muted-foreground">
+                      {counts.present === 0
+                        ? "No figures entered yet."
+                        : `${counts.reviewed} of ${counts.present} present figures confirmed.`}
+                    </p>
+                  </div>
+                </CardContent>
+              </Card>
+            </form>
+          </>
+        ) : null}
+
+        {show("analysis") ? (
+          <>
+            <section
+              className="space-y-4"
+              aria-label="Run analysis"
+              aria-busy={analysis.loading || workspaceBusy}
+            >
+              <Button
+                type="button"
+                onClick={() => void analyseFigures()}
+                disabled={analysis.loading || workspaceBusy}
+              >
+                {analysis.loading || workspaceBusy
+                  ? "Analysing…"
+                  : analysis.error
+                    ? "Retry analysis"
+                    : "Analyse figures"}
+              </Button>
+              <p className="text-sm text-muted-foreground">
+                Unconfirmed or missing inputs remain visible as evidence gaps.
+                Analysis does not confirm entries for you.
+              </p>
+              <p role="status" aria-live="polite">
+                {analysis.loading || workspaceBusy
+                  ? "Calculating from the submitted figures…"
+                  : analysis.stale ||
+                      (activeWorkspace !== null &&
+                        activeWorkspace.form !== form &&
+                        activeWorkspace.analysis !== null)
+                    ? "Entries changed. Previous results are hidden; review and analyse again."
+                    : savedClean &&
+                        activeWorkspace.analysis === null &&
+                        activeWorkspace.runs.some((run) => run.superseded)
+                      ? `Saved revision ${activeWorkspace.revision} supersedes earlier analysis runs. Review and analyse again to refresh results.`
+                      : displayedAnalysis
+                        ? "Analysis complete."
+                        : ""}
+              </p>
+              {analysis.error ? (
+                <Alert variant="destructive">
+                  <AlertTitle>Analysis could not complete</AlertTitle>
+                  <AlertDescription>
+                    {analysis.error} Your entries are kept.
+                  </AlertDescription>
+                </Alert>
               ) : null}
-            </CardContent>
-          </Card>
-        </form>
-
-        <section
-          className="space-y-4"
-          aria-label="Run analysis"
-          aria-busy={analysis.loading || workspaceBusy}
-        >
-          <Button
-            type="button"
-            onClick={() => void analyseFigures()}
-            disabled={analysis.loading || workspaceBusy}
-          >
-            {analysis.loading || workspaceBusy
-              ? "Analysing…"
-              : analysis.error
-                ? "Retry analysis"
-                : "Analyse figures"}
-          </Button>
-          <p className="text-sm text-muted-foreground">
-            Unconfirmed or missing inputs remain visible as evidence gaps.
-            Analysis does not confirm entries for you.
-          </p>
-          <p role="status" aria-live="polite">
-            {analysis.loading || workspaceBusy
-              ? "Calculating from the submitted figures…"
-              : analysis.stale ||
-                  (activeWorkspace !== null &&
-                    activeWorkspace.form !== form &&
-                    activeWorkspace.analysis !== null)
-                ? "Entries changed. Previous results are hidden; review and analyse again."
-                : savedClean &&
-                    activeWorkspace.analysis === null &&
-                    activeWorkspace.runs.some((run) => run.superseded)
-                  ? `Saved revision ${activeWorkspace.revision} supersedes earlier analysis runs. Review and analyse again to refresh results.`
-                  : displayedAnalysis
-                    ? "Analysis complete."
-                    : ""}
-          </p>
-          {analysis.error ? (
-            <Alert variant="destructive">
-              <AlertTitle>Analysis could not complete</AlertTitle>
-              <AlertDescription>
-                {analysis.error} Your entries are kept.
-              </AlertDescription>
-            </Alert>
-          ) : null}
-        </section>
-        {displayedAnalysis ? (
-          <AnalysisResults
-            data={displayedAnalysis}
-            businessName={form.businessName}
-            businessId={savedClean ? activeWorkspace.id : undefined}
-            inputRevision={savedClean ? activeWorkspace.revision : undefined}
-            runs={savedClean ? activeWorkspace.runs : undefined}
-          />
+            </section>
+            {displayedAnalysis ? (
+              <AnalysisResults
+                data={displayedAnalysis}
+                businessName={form.businessName}
+                businessId={savedClean ? activeWorkspace.id : undefined}
+                inputRevision={savedClean ? activeWorkspace.revision : undefined}
+                runs={savedClean ? activeWorkspace.runs : undefined}
+              />
+            ) : null}
+          </>
         ) : null}
         </div>
 
-        {activeWorkspace ? (
+        {show("report") && activeWorkspace ? (
           <PreparationReportPanel
             key={`report-${activeWorkspace.id}`}
             businessId={activeWorkspace.id}
@@ -1742,7 +1791,7 @@ function ManualEntry() {
           />
         ) : null}
 
-        {activeWorkspace ? (
+        {show("qa") && activeWorkspace ? (
           <div className={activeReport ? "print:hidden" : undefined}>
             <WorkspaceQA
               key={activeWorkspace.id}
@@ -1773,7 +1822,7 @@ function ManualEntry() {
           </p>
         </footer>
       </fieldset>
-    </main>
+    </AppShell>
   );
 }
 

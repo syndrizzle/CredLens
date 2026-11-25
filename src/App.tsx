@@ -1,7 +1,14 @@
-import { ManualEntry } from "@/features/manual-entry/ManualEntry";
+import { RouterProvider } from "@tanstack/react-router";
+
+import { ThemeProvider } from "@/components/theme";
+import { router } from "@/app/router";
 
 function App() {
-  return <ManualEntry />;
+  return (
+    <ThemeProvider>
+      <RouterProvider router={router} />
+    </ThemeProvider>
+  );
 }
 
 export default App;

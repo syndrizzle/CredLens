@@ -1,6 +1,7 @@
 // Bundle for a headless browser; see README for the dependency-free run command.
 import { act } from "react";
 import { createRoot } from "react-dom/client";
+import { RouterProvider, createMemoryHistory, createRootRoute, createRouter } from "@tanstack/react-router";
 import { ManualEntry } from "../src/features/manual-entry/ManualEntry";
 import { analysisRequest } from "../src/features/analysis/api";
 import { createExampleForm } from "../src/features/manual-entry/model";
@@ -74,7 +75,9 @@ async function chooseWorkspace(label: string) {
 
 async function run() {
   const root = createRoot(document.getElementById("root")!);
-  await act(async () => root.render(<ManualEntry />));
+  // No section prop: every section renders on one page, so checks can span the whole workflow.
+  const router = createRouter({ routeTree: createRootRoute({ component: () => <ManualEntry /> }), history: createMemoryHistory() });
+  await act(async () => root.render(<RouterProvider router={router} />));
   check(name().matches(":disabled"), "Session restoration locks competing account actions");
   await act(async () => restoration.resolve(Response.json({ owner_id: "owner", email: "owner@example.com" })));
   await rename("Unsaved draft");
