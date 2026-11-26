@@ -2,6 +2,8 @@ import type { ComponentProps, ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
 import { HugeiconsIcon } from "@hugeicons/react";
 
+import { Logo } from "@/components/logo";
+
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -76,7 +78,19 @@ function AppShell({
           Skip to content
         </a>
         <Sidebar collapsible="icon" variant="inset">
-          <SidebarHeader>{switcher}</SidebarHeader>
+          <SidebarHeader>
+            <SidebarMenu>
+              <SidebarMenuItem>
+                <SidebarMenuButton size="lg" tooltip="CredLens" render={<SidebarLink to="/" />}>
+                  <span className="flex size-8 shrink-0 items-center justify-center text-foreground">
+                    <Logo className="size-5!" />
+                  </span>
+                  <span className="font-heading text-lg font-semibold tracking-tight">CredLens</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
+            {switcher}
+          </SidebarHeader>
           <SidebarContent>
             <nav aria-label="Main" className="flex min-h-0 flex-1 flex-col">
               {GROUPS.map((group) => (

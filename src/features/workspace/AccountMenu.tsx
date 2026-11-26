@@ -1,8 +1,7 @@
 import { Link } from "@tanstack/react-router";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { Logout01Icon, Settings01Icon, UnfoldMoreIcon, UserAdd01Icon } from "@hugeicons/core-free-icons";
+import { Logout01Icon, Settings01Icon, UnfoldMoreIcon, UserAdd01Icon, UserIcon } from "@hugeicons/core-free-icons";
 import { ThemeSubmenu } from "@/components/theme";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -21,9 +20,6 @@ function AccountMenu() {
   const label = session?.email ?? "Guest";
   const identity = (
     <>
-      <Avatar className="size-8 rounded-lg">
-        <AvatarFallback className="rounded-lg">{label.slice(0, 2).toUpperCase()}</AvatarFallback>
-      </Avatar>
       <span className="grid min-w-0 flex-1 text-left text-sm leading-tight">
         <span className="truncate font-medium">{label}</span>
         <span className="truncate text-xs text-muted-foreground">{session ? "Signed in" : "Demo mode"}</span>
@@ -40,12 +36,13 @@ function AccountMenu() {
             disabled={actionsDisabled}
             render={<SidebarMenuButton size="lg" className="data-popup-open:bg-sidebar-accent" />}
           >
+            <HugeiconsIcon icon={UserIcon} />
             {identity}
             <HugeiconsIcon icon={UnfoldMoreIcon} className="ml-auto" />
           </DropdownMenuTrigger>
           <DropdownMenuContent side={isMobile ? "bottom" : "right"} align="end" className="min-w-56">
             <DropdownMenuGroup>
-              <DropdownMenuLabel className="flex items-center gap-2 p-1.5 font-normal text-foreground">
+              <DropdownMenuLabel className="p-1.5 font-normal text-foreground">
                 {identity}
               </DropdownMenuLabel>
             </DropdownMenuGroup>

@@ -69,7 +69,7 @@ The baseline is the supplied **CredLens-Milestone-One-Report.pdf**, the Group 36
 - Tailwind CSS v4 through the Vite plugin.
 - shadcn/ui with the **base-nova** preset and Base UI primitives. Use `components.json` as the configuration source of truth; do not assume Radix component APIs.
 - Hugeicons through `@hugeicons/react` and `@hugeicons/core-free-icons`.
-- Existing theme in `src/index.css`: neutral base, green primary tokens, Inter body font, Merriweather heading font, and light/dark variables.
+- Existing theme in `src/index.css`: neutral base, green primary tokens, Inter body font, Bricolage Grotesque heading and wordmark font (paired with the Lifted corner mark, user choice 2026-11-26), and light/dark variables.
 - Bun is the existing package manager; preserve `bun.lock` and avoid introducing another lockfile.
 - Oxlint for linting. The `@/` alias resolves to `src/`.
 - See the verified baseline and task statuses in [docs/PROJECT_SPEC.md](docs/PROJECT_SPEC.md) for current implementation state and check results; keep progress details there rather than duplicating them here.
@@ -133,6 +133,8 @@ Retain manual entry if extraction needs fewer supported layouts. Reduce model/co
 - Hash passwords when authentication is introduced and require HTTPS before a non-local pilot. Do not claim regulatory compliance or statement authenticity without evidence.
 
 ## Verification and handoff
+
+- Commit messages carry no agent attribution: no `Co-Authored-By` or "Generated with" lines (user preference, 2026-11-26).
 
 - For code changes, run the relevant available checks: `bun run lint` and `bun run build` for the frontend; targeted Pytest checks once a backend exists. Documentation-only edits do not require an application build.
 - Add meaningful tests for financial rules, evidence dependencies, access boundaries, and other consequential behaviour. Do not add tests that merely mirror trivial implementation details.

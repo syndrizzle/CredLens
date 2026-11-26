@@ -1,4 +1,5 @@
 from contextlib import contextmanager
+from pathlib import Path
 from urllib.parse import quote
 from uuid import UUID
 
@@ -19,6 +20,8 @@ from app.auth import (
     revoke_session,
 )
 from app.database import check_database, get_engine
+from app.frontend import mount_frontend
+from app.settings import setting
 from app.document_ingress import DOCUMENT_UPLOAD_PATH, DocumentUploadGuard
 from app.documents import (
     DocumentRejectError,
@@ -505,3 +508,8 @@ def get_audit_events(
         return list_audit_events(
             connection, session.owner_id, business_id=business_id, limit=limit
         )
+
+
+# The production image ships the built SPA (FRONTEND_DIST); local development uses Vite instead.
+if frontend_dist := setting("FRONTEND_DIST"):
+    mount_frontend(app, Path(frontend_dist))

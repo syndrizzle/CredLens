@@ -1,6 +1,5 @@
 import { HugeiconsIcon } from "@hugeicons/react";
-import { Add01Icon, Delete02Icon, UnfoldMoreIcon } from "@hugeicons/core-free-icons";
-import { Logo } from "@/components/logo";
+import { Add01Icon, Building03Icon, Delete02Icon, UnfoldMoreIcon } from "@hugeicons/core-free-icons";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -14,14 +13,6 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { SidebarMenu, SidebarMenuButton, SidebarMenuItem, useSidebar } from "@/components/ui/sidebar";
 import { useWorkspace } from "./use-workspace";
-
-function BusinessMark() {
-  return (
-    <span className="flex aspect-square size-8 items-center justify-center rounded-lg bg-sidebar-primary text-sidebar-primary-foreground">
-      <Logo className="size-5" />
-    </span>
-  );
-}
 
 function WorkspaceSwitcher() {
   const {
@@ -41,14 +32,15 @@ function WorkspaceSwitcher() {
   const name = form.businessName.trim() || "Untitled business";
 
   if (!session) {
+    if (!guest) return null;
     return (
       <SidebarMenu>
         <SidebarMenuItem>
           <SidebarMenuButton size="lg" render={<div />} className="hover:bg-transparent active:bg-transparent">
-            <BusinessMark />
+            <HugeiconsIcon icon={Building03Icon} />
             <span className="grid min-w-0 flex-1 text-left leading-tight">
-              <span className="truncate font-medium">{guest ? name : "CredLens"}</span>
-              <span className="truncate text-xs text-muted-foreground">{guest ? "Demo, not saved" : ""}</span>
+              <span className="truncate font-medium">{name}</span>
+              <span className="truncate text-xs text-muted-foreground">Demo, not saved</span>
             </span>
           </SidebarMenuButton>
         </SidebarMenuItem>
@@ -65,7 +57,7 @@ function WorkspaceSwitcher() {
             disabled={actionsDisabled}
             render={<SidebarMenuButton size="lg" className="data-popup-open:bg-sidebar-accent" />}
           >
-            <BusinessMark />
+            <HugeiconsIcon icon={Building03Icon} />
             <span className="grid min-w-0 flex-1 text-left leading-tight">
               <span className="truncate font-medium">{name}</span>
               <span className="truncate text-xs text-muted-foreground">

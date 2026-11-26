@@ -1,10 +1,11 @@
 import { cn } from "@/lib/utils"
 
-// Ledger C mark; currentColor keeps it monochrome in light, dark and print.
+// Lifted corner mark: the source page's corner lifts off and becomes the arrow to the next step.
+// currentColor keeps it monochrome in light, dark and print.
 function Logo({ className }: { className?: string }) {
   return (
-    <svg viewBox="1.31 3 42 42" fill="currentColor" aria-hidden="true" className={cn("size-6", className)}>
-      <path d="M41.57 35.5C37.82 41.22 31.35 45 24 45C16.65 45 10.18 41.22 6.43 35.5ZM41.57 12.5H6.43C10.18 6.78 16.65 3 24 3C31.35 3 37.82 6.78 41.57 12.5ZM18.73 15.5C16.29 17.01 14.56 19.55 14.11 22.5H3.05C3.23 20.02 3.83 17.67 4.79 15.5ZM14.11 25.5C14.56 28.45 16.29 30.99 18.73 32.5H4.79C3.83 30.33 3.23 27.98 3.05 25.5ZM37.6 15.5 32.48 18.7C31.67 17.4 30.57 16.31 29.27 15.5ZM29.27 32.5C30.57 31.69 31.67 30.6 32.48 29.3L37.6 32.5Z" />
+    <svg viewBox="6 4 36 40" fill="currentColor" aria-hidden="true" className={cn("size-6", className)}>
+      <path d="M6 8H20L38 26V44H6ZM26 4H42V20Z" />
     </svg>
   )
 }

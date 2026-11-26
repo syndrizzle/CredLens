@@ -108,15 +108,22 @@ Without `sudo`, `CHOKIDAR_USEPOLLING=1 bun run dev` makes the watcher poll inste
 
 ## Production deployment (Coolify)
 
-`docker-compose.yml` runs the whole app as one Coolify resource (Docker Compose build pack), live at https://credlens.sahil.lol:
+`docker-compose.yml` runs the whole app as one Coolify resource (Docker Compose build pack), live at https://credlens.sahil.lol behind Cloudflare (proxied) and the server's Traefik, which holds the Cloudflare origin certificate:
 
 | Service | Image | Reachable from |
 | --- | --- | --- |
-| `web` | root `Dockerfile`: Bun 1.4.4 builds the Vite app, nginx 1.30.8 serves it and proxies `/api` | the internet, via Coolify's Traefik (HTTPS) |
-| `api` | `backend/Dockerfile`: Python 3.14.8, FastAPI, MiniLM baked in, `alembic upgrade head` on start | `web` only, on the stack's private network |
-| `db` | `pgvector/pgvector:0.8.7-pg17`, data in the `pgdata` volume | `api` only |
+| `app` | root `Dockerfile`: Bun 1.4.4 builds the Vite app; Python 3.14.8 runs FastAPI, which serves the SPA (`backend/app/frontend.py`) and `/api` on port 8000, runs `alembic upgrade head` on start and has MiniLM baked in | the internet, via Cloudflare → Traefik |
+| `db` | `pgvector/pgvector:0.8.7-pg17`, data in the `pgdata` volume | `app` only, on the stack's private network |
 
-Uploaded PDFs live in the `documents` volume. The browser talks to one origin, so session cookies stay `HttpOnly`, `SameSite=Lax` and `Secure`; the backend trusts forwarded headers only from nginx. Coolify generates the database user and password (`SERVICE_USER_POSTGRES`, `SERVICE_PASSWORD_POSTGRES`). Set `CREDLENS_AI_URL` and `CREDLENS_AI_TOKEN` under the resource's environment variables; the deployment refuses to start without them. A GitHub push webhook redeploys `main` automatically.
+Uploaded PDFs live in the `documents` volume. One origin serves page and API, so session cookies stay `HttpOnly`, `SameSite=Lax` and `Secure`, with no CORS. Coolify generates the database user and password (`SERVICE_USER_POSTGRES`, `SERVICE_PASSWORD_POSTGRES`, runtime-only). Set `CREDLENS_AI_URL` and `CREDLENS_AI_TOKEN` (runtime-only) under the resource's environment variables; the deployment refuses to start without them. A GitHub push webhook redeploys `main` automatically.
+
+### Trying it
+
+There are no preset accounts: choose **Create an account** on the sign-in page (any email, password of 12 to 128 characters), or **Continue as guest** for the browser-only demo. Fictional statement PDFs to upload are in the repository:
+
+- `backend/tests/fixtures/pdf_corpus/aster-reference.pdf`: the reference case; every figure extracts (24 candidates)
+- `backend/tests/fixtures/eval_pack/aster-eval.pdf`, `kaveri-precision.pdf`, `deccan-polymers.pdf`, `sahyadri-fasteners.pdf`: other fictional businesses and units (3-column tables fall back to manual entry)
+- the other files in `backend/tests/fixtures/pdf_corpus/` exercise problems on purpose (missing units, conflicting periods, duplicates)
 
 ## Live demonstration walkthrough
 

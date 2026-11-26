@@ -1,22 +1,9 @@
-# One-click Coolify deployment (Docker Compose build pack). Only `web` gets a domain;
-# `api` and `db` are reachable only on this resource's private network.
+# One-click Coolify deployment (Docker Compose build pack). Only `app` gets the domain (port 8000);
+# `db` is reachable only on this resource's private network.
 services:
-  web:
+  app:
     build:
       context: .
-      dockerfile: Dockerfile
-    depends_on:
-      api:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/healthz >/dev/null || exit 1"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-
-  api:
-    build:
-      context: ./backend
     environment:
       DATABASE_URL: postgresql://${SERVICE_USER_POSTGRES}:${SERVICE_PASSWORD_POSTGRES}@db:5432/credlens?sslmode=disable
       DATABASE_URL_UNPOOLED: postgresql://${SERVICE_USER_POSTGRES}:${SERVICE_PASSWORD_POSTGRES}@db:5432/credlens?sslmode=disable
