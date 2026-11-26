@@ -37,7 +37,7 @@ function WorkspaceSwitcher() {
       <SidebarMenu>
         <SidebarMenuItem>
           <SidebarMenuButton size="lg" render={<div />} className="hover:bg-transparent active:bg-transparent">
-            <HugeiconsIcon icon={Building03Icon} />
+            <span className="flex size-8 shrink-0 items-center justify-center"><HugeiconsIcon icon={Building03Icon} /></span>
             <span className="grid min-w-0 flex-1 text-left leading-tight">
               <span className="truncate font-medium">{name}</span>
               <span className="truncate text-xs text-muted-foreground">Demo, not saved</span>
@@ -57,7 +57,7 @@ function WorkspaceSwitcher() {
             disabled={actionsDisabled}
             render={<SidebarMenuButton size="lg" className="data-popup-open:bg-sidebar-accent" />}
           >
-            <HugeiconsIcon icon={Building03Icon} />
+            <span className="flex size-8 shrink-0 items-center justify-center"><HugeiconsIcon icon={Building03Icon} /></span>
             <span className="grid min-w-0 flex-1 text-left leading-tight">
               <span className="truncate font-medium">{name}</span>
               <span className="truncate text-xs text-muted-foreground">

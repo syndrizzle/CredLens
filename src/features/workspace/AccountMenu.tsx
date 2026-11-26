@@ -36,7 +36,7 @@ function AccountMenu() {
             disabled={actionsDisabled}
             render={<SidebarMenuButton size="lg" className="data-popup-open:bg-sidebar-accent" />}
           >
-            <HugeiconsIcon icon={UserIcon} />
+            <span className="flex size-8 shrink-0 items-center justify-center"><HugeiconsIcon icon={UserIcon} /></span>
             {identity}
             <HugeiconsIcon icon={UnfoldMoreIcon} className="ml-auto" />
           </DropdownMenuTrigger>
