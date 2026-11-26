@@ -8,6 +8,8 @@ import {
 import { Logo } from "@/components/logo";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
+import { formatDateTime } from "@/lib/format";
+import { EvidenceBadge } from "@/features/analysis/EvidenceBadge";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { Spinner } from "@/components/ui/spinner";
 import { Table, TableBody, TableCaption, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -22,7 +24,6 @@ import {
   generateReport,
   type AnalysisRunSummary,
   type DocumentSummary,
-  type EvidenceState,
   type Indicator,
   type PreparationReportResponse,
 } from "../analysis/api";
@@ -45,14 +46,6 @@ type PreparationReportPanelProps = {
   onActiveReportChange: (report: PreparationReportResponse | null) => void;
   onReportGenerated?: (report: PreparationReportResponse) => void;
 };
-
-function stateVariant(
-  state: EvidenceState,
-): "secondary" | "outline" | "destructive" {
-  if (state === "Supported") return "secondary";
-  if (state === "Needs review") return "destructive";
-  return "outline";
-}
 
 function analysisTargetLabel(target: Indicator | "balance_check"): string {
   return target === "balance_check"
@@ -90,8 +83,6 @@ function normalizedByKey(
   }
   return map;
 }
-
-const createdAt = new Intl.DateTimeFormat("en-IN", { dateStyle: "medium", timeStyle: "short" });
 
 export function PreparationReportPanel({
   businessId,
@@ -228,7 +219,7 @@ export function PreparationReportPanel({
                       <Badge variant={isCurrent ? "secondary" : "outline"}>{isCurrent ? "Current" : "Superseded"}</Badge>
                     </TableCell>
                     <TableCell className="hidden text-muted-foreground sm:table-cell">
-                      <time dateTime={run.created_at}>{createdAt.format(new Date(run.created_at))}</time>
+                      <time dateTime={run.created_at}>{formatDateTime(run.created_at)}</time>
                     </TableCell>
                     <TableCell className="hidden text-xs text-muted-foreground md:table-cell">{run.rule_version}</TableCell>
                     <TableCell className="pr-4 text-right">
@@ -310,9 +301,9 @@ export function PreparationReportSheet({
       <header className="space-y-3 border-b border-border pb-4 print-avoid-break">
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div>
-            <p className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
               <Logo className="size-4 text-foreground print:text-black" />
-              CredLens Financial Preparation Report
+              CredLens preparation report
             </p>
             <h2
               id="preparation-report-heading"
@@ -436,9 +427,7 @@ export function PreparationReportSheet({
                           </div>
                         </td>
                         <td className="py-2 pr-3">
-                          <Badge variant={stateVariant(finding.state)}>
-                            {finding.state}
-                          </Badge>
+                          <EvidenceBadge state={finding.state} />
                         </td>
                         <td className="py-2 pr-3 font-mono tabular-nums">
                           {formattedValue}
@@ -467,9 +456,7 @@ export function PreparationReportSheet({
                       </div>
                     </td>
                     <td className="py-2 pr-3">
-                      <Badge variant={stateVariant(period.balance_check.state)}>
-                        {period.balance_check.state}
-                      </Badge>
+                      <EvidenceBadge state={period.balance_check.state} />
                     </td>
                     <td className="py-2 pr-3 font-mono tabular-nums">
                       {period.balance_check.difference_inr === null
@@ -516,9 +503,7 @@ export function PreparationReportSheet({
                       {financialYearLabel(item.year_start)}
                     </td>
                     <td className="py-2 pr-3">
-                      <Badge variant={stateVariant(item.state)}>
-                        {item.state}
-                      </Badge>
+                      <EvidenceBadge state={item.state} />
                     </td>
                     <td className="py-2 pr-3">{item.message}</td>
                     <td className="py-2 text-muted-foreground">

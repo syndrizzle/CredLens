@@ -17,6 +17,7 @@ import {
   AlertTitle,
 } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
+import { EvidenceBadge } from "@/features/analysis/EvidenceBadge";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -645,11 +646,7 @@ function FinancialSource({
         {citation.year_start !== null ? (
           <span>{financialYearLabel(citation.year_start)}</span>
         ) : null}
-        <Badge
-          variant={citation.state === "Supported" ? "secondary" : "outline"}
-        >
-          {citation.state}
-        </Badge>
+        <EvidenceBadge state={citation.state} />
         {citation.value_display ? (
           <span className="tabular-nums">{citation.value_display}</span>
         ) : null}

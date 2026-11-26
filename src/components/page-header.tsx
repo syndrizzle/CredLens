@@ -1,6 +1,5 @@
 import type { ReactNode } from "react";
 
-// One heading row per page: title, one line of context, and the page's actions on the right.
 function PageHeader({ title, description, actions }: { title: string; description?: ReactNode; actions?: ReactNode }) {
   return (
     <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3 print:hidden">

@@ -30,6 +30,7 @@ import {
   type CandidateIssueCode,
   type DocumentExtractionResponse,
   type ExtractedCandidate,
+  type HighlightedCell,
 } from "../analysis/api";
 import {
   FINANCIAL_FIELDS,
@@ -41,12 +42,6 @@ import {
   type FormDraft,
 } from "../manual-entry/model";
 
-export type HighlightedCell = {
-  page: number;
-  table: number;
-  row: number;
-  col: number;
-};
 
 const ISSUE_LABELS: Record<CandidateIssueCode, string> = {
   missing_value: "Blank or dash value (kept missing)",

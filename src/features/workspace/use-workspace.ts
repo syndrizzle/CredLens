@@ -26,7 +26,7 @@ import {
   type WorkspaceResponse,
 } from "@/features/analysis/api";
 import { useAnalysis } from "@/features/analysis/use-analysis";
-import type { HighlightedCell } from "@/features/documents/SourceReview";
+import type { HighlightedCell } from "@/features/analysis/api";
 import { createContext, useContext, useEffect, useRef, useState, type FormEvent } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
@@ -233,7 +233,6 @@ function useWorkspaceController(section?: Section) {
       setGuest(false);
       setPassword("");
       setNotice(`Signed in as ${user.email}.`);
-      // Open the newest business unless a guest draft is waiting to be saved.
       if (items[0] && !hasEntries(form)) {
         try {
           applyWorkspace(await fetchWorkspace(items[0].id), null);

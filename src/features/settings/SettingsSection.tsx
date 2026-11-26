@@ -5,9 +5,8 @@ import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle }
 import { Spinner } from "@/components/ui/spinner";
 import { Item, ItemActions, ItemContent, ItemDescription, ItemTitle } from "@/components/ui/item";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { formatDateTime } from "@/lib/format";
 import { useWorkspace } from "@/features/workspace/use-workspace";
-
-const dateTime = new Intl.DateTimeFormat("en-IN", { dateStyle: "medium", timeStyle: "short" });
 
 function SettingsSection({ active }: { active: boolean }) {
   const {
@@ -86,7 +85,7 @@ function SettingsSection({ active }: { active: boolean }) {
                           : event.resource_type}
                       </TableCell>
                       <TableCell className="text-right text-xs text-muted-foreground">
-                        <time dateTime={event.created_at}>{dateTime.format(new Date(event.created_at))}</time>
+                        <time dateTime={event.created_at}>{formatDateTime(event.created_at)}</time>
                       </TableCell>
                     </TableRow>
                   ))}

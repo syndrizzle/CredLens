@@ -35,9 +35,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { formatDate } from "@/lib/format";
 import { useWorkspace } from "@/features/workspace/use-workspace";
-
-const uploadedAt = new Intl.DateTimeFormat("en-IN", { dateStyle: "medium" });
 
 function statusBadge(doc: DocumentSummary) {
   if (doc.status === "ready") return <Badge variant="secondary">Ready</Badge>;
@@ -201,7 +200,7 @@ function DocumentsSection() {
                     </TableCell>
                     <TableCell className="hidden text-muted-foreground md:table-cell">
                       <time dateTime={doc.created_at}>
-                        {uploadedAt.format(new Date(doc.created_at))}
+                        {formatDate(doc.created_at)}
                       </time>
                     </TableCell>
                     <TableCell className="pr-4">

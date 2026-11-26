@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
+import { EvidenceBadge } from "@/features/analysis/EvidenceBadge";
 import { Button } from "@/components/ui/button";
 import {
   Sheet,
@@ -153,7 +154,7 @@ export function IndicatorDetails({ data, row, businessId }: { data: AnalysisResp
           <section key={period.year_start} className="space-y-3 py-4 first:pt-0" aria-label={financialYearLabel(period.year_start)}>
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h3 className="font-medium">{financialYearLabel(period.year_start)}</h3>
-              <Badge variant={cell.state === "Supported" ? "secondary" : "outline"}>{cell.state}</Badge>
+              <EvidenceBadge state={cell.state} />
             </div>
             {cell.value ? <p className="text-2xl font-semibold tabular-nums">{cell.value}</p> : null}
             {row === "balance_check" ? (
@@ -277,7 +278,7 @@ export function AnalysisResults({
           Results for {businessName}
         </h2>
         <p className="text-sm text-muted-foreground">
-          INR · Standalone · {data.rule_version} · {originSummary}
+          {originSummary} · {data.rule_version}
           {inputRevision !== undefined
             ? ` · Input revision ${inputRevision} (current)`
             : ""}
@@ -335,9 +336,7 @@ export function AnalysisResults({
                               <span className="text-base font-semibold tabular-nums">
                                 {cell.value ?? "No result"}
                               </span>
-                              <Badge variant={cell.state === "Supported" ? "secondary" : "outline"}>
-                                {cell.state}
-                              </Badge>
+                              <EvidenceBadge state={cell.state} />
                             </span>
                             {cell.reasons.length > 0 ? (
                               <span className="text-xs font-normal text-muted-foreground">

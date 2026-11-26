@@ -130,6 +130,14 @@ export type DocumentExtractionSnapshot = {
   issues: string[];
 };
 
+// A source table cell in a document's extraction snapshot (1-based page, table, row and column).
+export type HighlightedCell = {
+  page: number;
+  table: number;
+  row: number;
+  col: number;
+};
+
 export type DocumentExtractionResponse = DocumentSummary & {
   extraction_status:
     | "ready"

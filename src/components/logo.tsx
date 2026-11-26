@@ -1,7 +1,6 @@
 import { cn } from "@/lib/utils"
 
 // Lifted corner mark: the source page's corner lifts off and becomes the arrow to the next step.
-// currentColor keeps it monochrome in light, dark and print.
 function Logo({ className }: { className?: string }) {
   return (
     <svg viewBox="6 4 36 40" fill="currentColor" aria-hidden="true" className={cn("size-6", className)}>

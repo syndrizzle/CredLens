@@ -8,6 +8,7 @@ import { Tooltip } from "@/components/dither-kit/tooltip";
 import { XAxis } from "@/components/dither-kit/x-axis";
 import { YAxis } from "@/components/dither-kit/y-axis";
 import { Badge } from "@/components/ui/badge";
+import { EvidenceBadge } from "@/features/analysis/EvidenceBadge";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -111,9 +112,7 @@ function AnalysisOverview({ data, onOpenFinding, onOpenInput, onOpenAllActions }
                     {supported ? formatFinding(finding) : "No result"}
                   </CardTitle>
                   <CardAction>
-                    <Badge variant={finding.state === "Supported" ? "secondary" : "outline"}>
-                      {finding.state}
-                    </Badge>
+                    <EvidenceBadge state={finding.state} />
                   </CardAction>
                 </CardHeader>
                 {supported && prior ? (

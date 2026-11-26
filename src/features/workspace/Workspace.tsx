@@ -35,14 +35,6 @@ import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
 // The AI SDK and chat components load only once the Assistant is first opened.
 const WorkspaceQA = lazy(() => import("@/features/qa/WorkspaceQA").then((module) => ({ default: module.WorkspaceQA })));
 
-// What each account-only page offers, for the guest and unsaved-business prompts.
-const ACCOUNT_PURPOSE: Partial<Record<Section, string>> = {
-  documents: "upload statement PDFs",
-  reports: "create reports for your accountant or lender",
-  assistant: "ask questions about your figures and documents",
-  settings: "manage your account",
-};
-
 function Workspace({
   section,
   authMode,
@@ -95,11 +87,11 @@ function Workspace({
   if (authMode) return <Navigate to="/" replace />;
 
   const show = (id: Section) => !section || section === id;
-  const locked = (id: Section) =>
-    !session
-      ? Boolean(SECTIONS.find((item) => item.id === id)?.account)
-      : id !== "settings" && Boolean(ACCOUNT_PURPOSE[id]) && !activeWorkspace;
-  const lockedSection = section && locked(section) ? section : null;
+  const locked = (id: Section) => {
+    const { requires } = SECTIONS.find((item) => item.id === id)!;
+    return requires !== null && (!session || (requires === "business" && !activeWorkspace));
+  };
+  const lockedPage = section && locked(section) ? SECTIONS.find((item) => item.id === section)! : null;
 
   return (
     <WorkspaceContext.Provider value={workspace}>
@@ -168,11 +160,11 @@ function Workspace({
               </Alert>
             ) : null}
 
-            {lockedSection ? (
+            {lockedPage ? (
               <>
                 <PageHeader
                   title={
-                    SECTIONS.find((item) => item.id === lockedSection)!.title
+                    lockedPage.title
                   }
                 />
                 <Empty className="border border-dashed border-border">
@@ -184,8 +176,8 @@ function Workspace({
                     </EmptyTitle>
                     <EmptyDescription>
                       {session
-                        ? `Once saved, you can ${ACCOUNT_PURPOSE[lockedSection]}.`
-                        : `An account lets you ${ACCOUNT_PURPOSE[lockedSection]}. Your demo figures carry over.`}
+                        ? `Once saved, you can ${lockedPage.offers}.`
+                        : `An account lets you ${lockedPage.offers}. Your demo figures carry over.`}
                     </EmptyDescription>
                   </EmptyHeader>
                   <EmptyContent>
