@@ -4,6 +4,7 @@ CredLens is a local-first financial-health and financing-readiness assistant for
 
 ## Core capabilities
 
+- **Dashboard interface (`src/app/`, `src/features/`):** shadcn `base-nova` sidebar shell with six sections (Overview, Figures, Documents, Analysis, Report, Q&A) on TanStack Router URLs, a sidebar workspace switcher and account menu, Light/Dark/System theme menu, an Overview with indicator cards, dither-kit trend charts and ordered preparation actions, and a year-by-figure entry grid. Sections stay mounted while you navigate, so drafts, answers and open reports survive switching.
 - **Deterministic financial analysis (`backend/app/analysis.py`):** Exact Python `Decimal` (precision `34`, `ROUND_HALF_UP` display only) across six indicators — revenue growth, net profit margin, working capital, current ratio, debt-to-equity (excluding leases, counting current maturities once), and interest coverage (EBIT, never EBITDA) — plus balance-sheet consistency checks (`0.015 × unit_multiplier` INR rounding tolerance) and workflow-ordered preparation actions (`preparation-actions-v1`).
 - **Four distinct evidence states:** `Supported`, `Needs review`, `Not assessed`, and `Not meaningful`, evaluated independently per indicator so missing or unreviewed inputs block only dependent calculations without turning missing data into an adverse credit judgement.
 - **Owner-protected workspaces & revision history (`backend/app/auth.py`, `backend/app/persistence.py`):** Local FastAPI-managed accounts (`hashlib.scrypt` password hashing, SHA-256 hashed 7-day `HttpOnly` `SameSite=Lax` session cookies), optimistic concurrency (`PUT /api/businesses/{id}` with `expected_revision` / HTTP `409`), monotonic per-figure revisions, immutable `revisions` snapshots, and automatic supersession of outdated runs.
@@ -15,6 +16,16 @@ CredLens is a local-first financial-health and financing-readiness assistant for
   - Local loopback Ollama (`qwen3:4b-instruct`, rejecting remote hosts and `:cloud` tags) with `<untrusted_document_passage>` escaping, server-verified `[F#]`/`[D#]` citations, lending/scoring/read-only guardrails, and automatic deterministic template fallback when Ollama is unavailable.
 - **Printable versioned preparation reports (`backend/app/reports.py`, `src/features/reports/PreparationReport.tsx`):** Native browser `@media print` reports backed by immutable `analysis_runs` snapshots with `CURRENT VERSION` vs. `SUPERSEDED` banners, missing-evidence tables, ordered actions, referenced documents, and limitations.
 - **Active-data deletion & minimal audit log (`backend/app/documents.py`, `backend/app/audit.py`):** Staged workspace deletion (`DELETE /api/businesses/{id}`) removes local `.pdf`/`.tmp` files and cascades across all workspace/figure/revision/run/document/chunk tables while recording a minimal scalar-only `audit_events` entry (`GET /api/audit-events`, zero financial payloads) and disclosing database backup-retention limits.
+
+## Screenshots
+
+Fictional Aster Components data; captured from `vite preview` with mocked API responses.
+
+| Overview (dark) | Figures (light) |
+| --- | --- |
+| ![Overview with indicator cards, charts and preparation actions](docs/screenshots/overview-dark.png) | ![Year-by-figure entry grid](docs/screenshots/figures-light.png) |
+| **Documents and source review (dark)** | **Analysis (light)** |
+| ![PDF documents and page-linked source review](docs/screenshots/documents-dark.png) | ![Analysis findings and preparation actions](docs/screenshots/analysis-light.png) |
 
 ## Reproducible local setup (clean clone)
 
@@ -86,13 +97,15 @@ Open the URL Vite prints (typically `http://127.0.0.1:5173`).
 
 This sequence reproduces every item in the [Final demonstration checklist](docs/PROJECT_SPEC.md#final-demonstration-checklist) using the included fictional Aster Components PDFs (`backend/tests/fixtures/pdf_corpus/aster-reference.pdf`):
 
-1. **Create account & workspace:** Register a local account, enter `Aster Components (fictional)`, and click **Save workspace**.
-2. **Upload PDF & inspect source:** Upload `backend/tests/fixtures/pdf_corpus/aster-reference.pdf`, click **Review extracted figures**, inspect a source cell (`Inspect p. 2`), and click **Apply all usable candidates (24)**. Toggle comparability for FY 2024-25, confirm figures, and click **Analyse figures** → shows net profit margin moving from `9.00%` (FY 2023-24) to `5.00%` (FY 2024-25) with `Document: aster-reference.pdf · p. 1` citations and `financial-rules-v1`.
+Navigate with the sidebar sections; workspace switching, **New workspace** and **Delete workspace** live in the sidebar workspace menu, **Sign out** in the account menu, and **Save workspace** in the top bar.
+
+1. **Create account & workspace:** On **Overview**, register a local account. On **Figures**, enter `Aster Components (fictional)` as the business name and click **Save workspace** in the top bar.
+2. **Upload PDF & inspect source:** On **Documents**, upload `backend/tests/fixtures/pdf_corpus/aster-reference.pdf`, click **Review extracted figures**, inspect a source cell (`Inspect p. 2`), and click **Apply all usable candidates (24)**. On **Figures**, toggle comparability for FY 2024-25 and click **Confirm present figures**. On **Analysis**, click **Analyse figures** → shows net profit margin moving from `9.00%` (FY 2023-24) to `5.00%` (FY 2024-25) with `Document: aster-reference.pdf · p. 1` citations and `financial-rules-v1`.
 3. **Correct one extracted value at its source:** Edit FY 2024-25 `Interest expense` from `400000.00` to `300000.00` → figure converts immediately to `Manual` (unreviewed). Confirm and re-analyse → interest coverage updates from `3.00x` to `4.00x` and the earlier run is marked superseded.
 4. **Selective missing-input blocking:** Clear FY 2024-25 `Interest expense`, save, and re-analyse → `Interest coverage` displays `Not assessed` and requests interest expense while the five unrelated indicators remain `Supported`.
-5. **Versioned printable report & supersession:** Open the **Preparation report** marked `CURRENT VERSION`. Restore and confirm FY 2024-25 interest expense, then analyse again and open the refreshed current report. Open the earlier report to see `SUPERSEDED`. Print either version using **Print / Save as PDF**. Report version numbers follow saved analysis history.
-6. **Evidence-grounded Q&A & refusals:** Ask *"What do the borrowing notes say about leases?"* (returns `[D#]` page 3 citation) and *"Will a bank approve my INR 50 lakh loan?"* (refuses without inventing approval odds or credit scores). Stop Ollama to verify immediate deterministic template fallback.
-7. **Cross-business isolation & active-data deletion:** Verify a second account receives HTTP `404` on the first account's business/document/report IDs. Click **Delete workspace** → confirm backup-retention disclosure → deletes local PDFs and all derived database records while keeping a minimal `workspace_deleted` entry in **Activity log**.
+5. **Versioned printable report & supersession:** On **Report**, open the preparation report marked `CURRENT VERSION`. Restore and confirm FY 2024-25 interest expense, then analyse again and open the refreshed current report. Open the earlier report to see `SUPERSEDED`. Print either version using **Print / Save as PDF**. Report version numbers follow saved analysis history.
+6. **Evidence-grounded Q&A & refusals:** On **Q&A**, ask *"What do the borrowing notes say about leases?"* (returns `[D#]` page 3 citation) and *"Will a bank approve my INR 50 lakh loan?"* (refuses without inventing approval odds or credit scores). Stop Ollama to verify immediate deterministic template fallback.
+7. **Cross-business isolation & active-data deletion:** Verify a second account receives HTTP `404` on the first account's business/document/report IDs. Choose **Delete workspace** in the sidebar workspace menu → confirm the backup-retention disclosure → deletes local PDFs and all derived database records while keeping a minimal `workspace_deleted` entry in the Overview **Activity log**.
 
 ## Verification and evaluation commands
 
@@ -102,9 +115,9 @@ This sequence reproduces every item in the [Final demonstration checklist](docs/
 | Backend dependency integrity | `cd backend && .venv/bin/pip check` |
 | Schema consistency check | `cd backend && .venv/bin/alembic check` |
 | Live Neon tests (use a **disposable** direct branch URL only) | `cd backend && PERSISTENCE_TEST_URL="<direct-disposable-url>" .venv/bin/python -m pytest -q` |
-| Frontend unit & Python-integration tests (`44` pass) | `bun test` |
-| Headless browser UI checks (`62` checks) | `bun tests/run-workspace-ui.ts /path/to/chromium-or-chrome` |
-| Frontend lint & production build | `bun x oxlint src/ && bun run build` |
+| Frontend unit & Python-integration tests (`46` pass) | `bun test` |
+| Headless browser UI checks (`64` checks) | `bun tests/run-workspace-ui.ts /path/to/chromium-or-chrome` |
+| Frontend lint & production build | `bun x oxlint src/ tests/ && bun run build` |
 | Reproduce frozen P5-03 evaluation pack hashes | `backend/.venv/bin/python backend/tests/build_eval_pack.py` |
 | Re-run P5-04 A/B/C ablation (requires local Ollama running) | `backend/.venv/bin/python backend/tests/run_p504_evaluation.py --output /tmp/credlens-evaluation.json` |
 
@@ -118,6 +131,7 @@ The Phase 5 closeout reran the same frozen questions with a stricter check for e
 | --- | --- | --- | --- |
 | Frontend | React / Vite / TypeScript / Tailwind CSS | `19.3.1` / `8.3.6` / `~7.0.2` / `4.3.5` (`bun.lock`) | MIT / Apache-2.0 |
 | Frontend UI | `@base-ui/react` / `shadcn` (`base-nova`) / Hugeicons | `1.9.0` / `4.23.0` / `1.1.10` | MIT |
+| Frontend routing & charts | `@tanstack/react-router` / dither-kit (vendored in `src/components/dither-kit/`) / `motion` / `d3-scale` / `d3-shape` | `1.170.46` / registry snapshot 2026-11-25 / `14.14.0` / `4.0.3` / `3.2.1` | MIT / ISC |
 | Backend API | FastAPI / Pydantic / Uvicorn / SQLAlchemy / Alembic / Psycopg | `0.162.2` / `2.14.3` / `0.54.0` / `2.1.8` / `1.20.1` / `3.3.9` | MIT / LGPL / BSD |
 | PDF & Vector | `pdfplumber` / `pgvector` (Python) / PostgreSQL `vector` | `0.11.10` / `0.5.1` / `0.8.7` | MIT / PostgreSQL |
 | Local embeddings | `sentence-transformers` / `torch` (CPU) / `all-MiniLM-L6-v2` | `6.3.0` / `2.15.0+cpu` / rev `1110a243fdf4` (`384d`, `256` tok) | Apache-2.0 / BSD |

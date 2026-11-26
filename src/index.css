@@ -86,6 +86,7 @@
 }
 
 @theme inline {
+    --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
     --font-sans: 'Inter Variable', sans-serif;
     --font-heading: 'Merriweather Variable', serif;
     --color-sidebar-ring: var(--sidebar-ring);
@@ -138,6 +139,24 @@
   html {
     @apply font-sans;
     }
+}
+
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 200ms;
+  animation-timing-function: var(--ease-out);
+}
+
+/* The translucent popover preset loses legibility when the OS asks for less transparency. */
+@media (prefers-reduced-transparency: reduce) {
+  [data-slot="dropdown-menu-content"],
+  [data-slot="select-content"] {
+    background-color: var(--popover) !important;
+  }
+  [data-slot="dropdown-menu-content"]::before,
+  [data-slot="select-content"]::before {
+    backdrop-filter: none !important;
+  }
 }
 
 @media print {

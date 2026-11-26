@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
-  AiSparklesIcon,
   Alert02Icon,
   InformationCircleIcon,
 } from "@hugeicons/core-free-icons";
@@ -66,7 +65,8 @@ export function WorkspaceQA({
   const [yearFilter, setYearFilter] = useState<string>(ALL_YEARS);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [turns, setTurns] = useState<QAResponse[]>([]);
+  const [turns, setTurns] = useState<{ id: number; turn: QAResponse }[]>([]);
+  const nextTurnId = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
@@ -128,7 +128,8 @@ export function WorkspaceQA({
         controller.signal,
       );
       if (abortRef.current !== controller) return;
-      setTurns((current) => [response, ...current].slice(0, 10));
+      const id = nextTurnId.current++;
+      setTurns((current) => [{ id, turn: response }, ...current].slice(0, 10));
       setQuestion("");
     } catch (caught) {
       if (controller.signal.aborted || abortRef.current !== controller) return;
@@ -151,15 +152,14 @@ export function WorkspaceQA({
     <section className="space-y-4" aria-labelledby="qa-heading">
       <Card>
         <CardHeader>
-          <CardTitle id="qa-heading" className="flex items-center gap-2">
-            <HugeiconsIcon icon={AiSparklesIcon} className="size-5" />
-            Evidence-grounded Q&amp;A · {businessName}
+          <CardTitle>
+            <h2 id="qa-heading">Evidence-grounded Q&amp;A</h2>
           </CardTitle>
           <CardDescription>
-            Ask focused questions about saved indicators, missing inputs, or
-            uploaded PDF disclosures. Numerical answers use deterministic Python
-            outputs for input revision {inputRevision}; if the local model is
-            unavailable, CredLens returns a deterministic template summary.
+            Ask about {businessName}&rsquo;s saved indicators, missing inputs or
+            uploaded PDF disclosures. Numbers come from the deterministic
+            analysis for input revision {inputRevision}; without the local
+            model, answers use a template summary.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -179,7 +179,7 @@ export function WorkspaceQA({
             className="space-y-3"
             aria-busy={loading}
           >
-            <div className="grid gap-3 sm:grid-cols-[1fr_12rem]">
+            <div className="grid items-end gap-3 sm:grid-cols-[1fr_12rem_auto]">
               <div className="space-y-1.5">
                 <Label htmlFor="qa-question">Question</Label>
                 <Input
@@ -192,7 +192,7 @@ export function WorkspaceQA({
                   }}
                   maxLength={500}
                   disabled={formBlocked}
-                  placeholder="e.g. What is blocking interest coverage, or what do the borrowing notes say?"
+                  placeholder="What is blocking interest coverage?"
                   autoComplete="off"
                 />
               </div>
@@ -220,12 +220,12 @@ export function WorkspaceQA({
                   </SelectContent>
                 </Select>
               </div>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2">
               <Button type="submit" disabled={formBlocked}>
                 {loading ? "Assembling answer…" : "Ask question"}
               </Button>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
               {turns.length > 0 ? (
                 <Button
                   type="button"
@@ -281,9 +281,9 @@ export function WorkspaceQA({
 
           {turns.length > 0 ? (
             <div className="space-y-4 pt-2">
-              {turns.map((turn, index) => (
+              {turns.map(({ id, turn }) => (
                 <QATurnCard
-                  key={`${turn.input_revision}-${index}-${turn.question}`}
+                  key={id}
                   businessId={businessId}
                   currentRevision={inputRevision}
                   turn={turn}
@@ -313,7 +313,7 @@ function QATurnCard({
   const otherDocs = turn.document_citations.filter((c) => !c.cited);
 
   return (
-    <article className="space-y-3 rounded-lg border border-border p-4">
+    <article className="space-y-3 rounded-lg border border-border p-4 animate-in duration-200 ease-out fade-in-0 motion-safe:slide-in-from-top-1">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <h3 className="font-heading text-base font-medium">{turn.question}</h3>
         <div className="flex flex-wrap items-center gap-1.5">
@@ -351,7 +351,7 @@ function QATurnCard({
 
       {citedFin.length > 0 ? (
         <div className="space-y-2 border-t border-border pt-3">
-          <h4 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+          <h4 className="text-xs font-medium text-muted-foreground">
             Cited financial evidence ({turn.rule_version})
           </h4>
           <ul className="space-y-2">
@@ -364,7 +364,7 @@ function QATurnCard({
 
       {citedDocs.length > 0 ? (
         <div className="space-y-2 border-t border-border pt-3">
-          <h4 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+          <h4 className="text-xs font-medium text-muted-foreground">
             Cited document passages
           </h4>
           <ul className="space-y-2">
@@ -475,7 +475,7 @@ function DocumentCitationRow({
           )}
           target="_blank"
           rel="noreferrer"
-          className="text-primary underline-offset-4 hover:underline"
+          className="shrink-0 font-medium underline underline-offset-4"
         >
           Open page {citation.page_number}
         </a>

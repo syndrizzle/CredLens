@@ -2,7 +2,7 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { RouterProvider, createMemoryHistory, createRootRoute, createRouter } from "@tanstack/react-router";
-import { ManualEntry } from "../src/features/manual-entry/ManualEntry";
+import { Workspace } from "../src/features/workspace/Workspace";
 import { analysisRequest } from "../src/features/analysis/api";
 import { createExampleForm } from "../src/features/manual-entry/model";
 
@@ -66,9 +66,27 @@ globalThis.fetch = async (input, options) => {
   if (path.includes("/documents")) return docPending.promise;
   return path.endsWith("/analysis") ? analysisPending.promise : pending.promise;
 };
+const switcher = () => document.querySelector<HTMLButtonElement>("#workspace-switcher")!;
+const account = () => document.querySelector<HTMLButtonElement>("#account-menu")!;
+async function settled(ready: () => boolean) {
+  for (let attempt = 0; attempt < 40 && !ready(); attempt++)
+    await act(() => new Promise<void>(done => setTimeout(done, 25)));
+}
+// Base UI menus open on a mouse press, once any closing menu or dialog has unmounted, and mount items a frame later.
+async function menuItem(trigger: HTMLElement, matches: (item: HTMLElement) => boolean) {
+  await settled(() => !document.querySelector('[role="menu"], [role="alertdialog"]'));
+  await click(trigger);
+  const item = () => [...document.querySelectorAll<HTMLElement>('[role^="menuitem"]')].find(matches);
+  await settled(() => Boolean(item()));
+  return item() ?? null;
+}
+async function fromMenu(trigger: HTMLElement, label: string) {
+  const item = await menuItem(trigger, el => el.textContent?.trim() === label);
+  if (!item) throw new Error(`Missing menu item: ${label}`);
+  await click(item);
+}
 async function chooseWorkspace(label: string) {
-  await click(document.querySelector<HTMLButtonElement>('button[role="combobox"]')!);
-  const item = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find(el => el.textContent?.includes(label));
+  const item = await menuItem(switcher(), el => el.getAttribute("role") === "menuitemradio" && Boolean(el.textContent?.includes(label)));
   if (!item) throw new Error(`Missing option: ${label}`);
   await click(item);
 }
@@ -76,12 +94,12 @@ async function chooseWorkspace(label: string) {
 async function run() {
   const root = createRoot(document.getElementById("root")!);
   // No section prop: every section renders on one page, so checks can span the whole workflow.
-  const router = createRouter({ routeTree: createRootRoute({ component: () => <ManualEntry /> }), history: createMemoryHistory() });
+  const router = createRouter({ routeTree: createRootRoute({ component: () => <Workspace /> }), history: createMemoryHistory() });
   await act(async () => root.render(<RouterProvider router={router} />));
   check(name().matches(":disabled"), "Session restoration locks competing account actions");
   await act(async () => restoration.resolve(Response.json({ owner_id: "owner", email: "owner@example.com" })));
   await rename("Unsaved draft");
-  await click(button("New workspace"));
+  await fromMenu(switcher(), "New workspace");
   check(name().value === "Unsaved draft", "New workspace waits for confirmation");
   await click(button("Keep editing"));
   check(name().value === "Unsaved draft", "Cancel keeps draft");
@@ -98,11 +116,11 @@ async function run() {
   check(calls.filter(call => call === "POST /api/businesses").length === 1, "Same-turn double save sends one request");
   check(name().matches(":disabled"), "Name locked during save");
   check(document.querySelector('input[id^="figure-"]')?.matches(":disabled"), "Figures locked during save");
-  check(button("New workspace").matches(":disabled"), "Replacement locked during save");
-  check(document.querySelector('button[role="combobox"]')?.matches(":disabled"), "Selection locked during save");
+  check(switcher().matches(":disabled") && account().matches(":disabled"), "Replacement locked during save");
+  check(switcher().matches(":disabled"), "Selection locked during save");
   const count = calls.length;
-  await click(button("New workspace"));
-  await click(button("Sign out"));
+  await click(switcher());
+  await click(account());
   check(calls.length === count, "Pending save prevents competing requests");
   await act(async () => pending.resolve(Response.json(workspace("saved", "Unsaved draft"))));
   check(!name().matches(":disabled") && name().value === "Unsaved draft", "Save unlocks its original draft");
@@ -110,7 +128,7 @@ async function run() {
   pending = deferred();
   await chooseWorkspace("Business a");
   check(name().matches(":disabled"), "Name locked during load");
-  const select = document.querySelector<HTMLButtonElement>('button[role="combobox"]')!;
+  const select = switcher();
   const requestsBeforeSelect = calls.length;
   await click(select);
   check(select.matches(":disabled") && calls.length === requestsBeforeSelect, "Pending load prevents another selection");
@@ -247,7 +265,7 @@ async function run() {
   await click(button("Apply all usable candidates (2)"));
   check(text().includes("Replace 2 entered figures"), "Apply all asks for confirmation before overwriting entered figures");
   await click(button("Apply and replace"));
-  check(text().includes("PDF p. 2") && text().includes("Document: Aster_FY24.pdf · p. 2"), "Applied candidates show document origin and page reference");
+  check(Boolean(document.querySelector('button[aria-label="Inspect PDF p. 2 (Aster_FY24.pdf)"]')?.textContent?.includes("PDF p. 2")), "Applied candidates show document origin and page reference");
 
   const currentAssetsInput = [...document.querySelectorAll<HTMLInputElement>('input[id^="figure-"][id$="-current_assets"]')].at(-1)!;
   check(currentAssetsInput.value === "5200000.00", "Applied candidate populates the target financial figure input");
@@ -410,12 +428,12 @@ async function run() {
   check(name().value === "Draft after save failure" && !name().matches(":disabled"), "Failed save keeps draft and unlocks editor");
 
   await rename("Keep on failed logout");
-  await click(button("Sign out"));
+  await fromMenu(account(), "Sign out");
   await click(button("Discard and continue"));
   check(text().includes("session may still be active") && name().value === "Keep on failed logout", "HTTP logout failure preserves draft and warns");
-  check(Boolean(button("Sign out")), "HTTP logout failure retains signed-in UI");
+  check(Boolean(account()), "HTTP logout failure retains signed-in UI");
   logoutFailure = "network";
-  await click(button("Sign out"));
+  await fromMenu(account(), "Sign out");
   await click(button("Discard and continue"));
   check(text().includes("session may still be active") && name().value === "Keep on failed logout", "Network logout failure preserves draft and warns");
 
@@ -435,14 +453,15 @@ async function run() {
   }])));
   check(text().includes("report_generated") && text().includes("no financial payloads"), "Activity log renders minimal audit events");
 
-  await click(button("Delete workspace"));
+  await fromMenu(switcher(), "Delete workspace");
   check(text().includes("Backup limitation") && text().includes("not immediately purged"), "Delete workspace confirmation discloses backup retention limits");
   await click(button("Cancel"));
+  await settled(() => !document.querySelector('[role="alertdialog"]'));
   check(!text().includes("Delete workspace permanently"), "Cancelling delete keeps workspace intact");
 
   reportPending = deferred();
   await click(button("Viewing"));
-  await click(button("Delete workspace"));
+  await fromMenu(switcher(), "Delete workspace");
   pending = deferred();
   auditPending = deferred();
   await click(button("Delete workspace permanently"));
@@ -467,12 +486,12 @@ async function run() {
   check(!document.querySelector("#preparation-report-sheet"), "A late report cannot open in another workspace");
 
   await rename("Temporary draft");
-  await click(button("New workspace"));
+  await fromMenu(switcher(), "New workspace");
   await click(button("Discard and continue"));
   check(name().value === "", "Confirmed new workspace clears draft");
   await rename("Last draft");
   logoutFailure = null;
-  await click(button("Sign out"));
+  await fromMenu(account(), "Sign out");
   await click(button("Discard and continue"));
   check(name().value === "" && text().includes("Signed out. Workspace entries cleared"), "Successful logout clears draft and confirms success");
   await act(async () => root.unmount());

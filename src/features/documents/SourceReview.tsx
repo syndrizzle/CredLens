@@ -2,12 +2,21 @@ import { useState } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   Alert02Icon,
-  CheckmarkCircle02Icon,
   InformationCircleIcon,
 } from "@hugeicons/core-free-icons";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import {
   Card,
   CardAction,
@@ -184,6 +193,12 @@ export function SourceReview({
     onApplyCandidates(usableImports);
   }
 
+  const isInspected = (candidate: ExtractedCandidate) =>
+    highlightedCell?.page === candidate.page_number &&
+    highlightedCell.table === candidate.table_index &&
+    highlightedCell.row === candidate.row_index &&
+    highlightedCell.col === candidate.column_index;
+
   function inspectCandidate(candidate: ExtractedCandidate) {
     onSelectPage(candidate.page_number);
     onHighlightCell({
@@ -192,20 +207,34 @@ export function SourceReview({
       row: candidate.row_index,
       col: candidate.column_index,
     });
+    // Stacked layouts put the inspector below the list; side by side, "nearest" leaves it alone.
+    requestAnimationFrame(() =>
+      document.getElementById("source-page-inspector")?.scrollIntoView({
+        behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+        block: "nearest",
+      }),
+    );
   }
 
   return (
-    <Card id="source-review-panel" aria-labelledby="source-review-heading">
+    <Card
+      id="source-review-panel"
+      aria-labelledby="source-review-heading"
+      className="overflow-visible animate-in duration-200 ease-out fade-in-0 motion-safe:slide-in-from-top-1"
+    >
       <CardHeader>
-        <CardTitle id="source-review-heading">
-          Source review · {extraction.filename}
+        <CardTitle>
+          <h2 id="source-review-heading">Source review · {extraction.filename}</h2>
         </CardTitle>
         <CardDescription>
-          Inspect extracted pages and candidate figures against the source PDF.
-          Applied candidates start unreviewed; editing an applied amount
-          converts it to a manual entry.
+          Applied candidates start unreviewed. Editing an applied amount makes it a manual entry.
         </CardDescription>
-        <CardAction>
+        <CardAction className="flex flex-wrap justify-end gap-2">
+          {snapshot && extraction.extraction_status === "ready" && usableImports.length > 0 ? (
+            <Button type="button" size="sm" disabled={disabled} onClick={handleApplyAll}>
+              Apply all usable candidates ({usableImports.length})
+            </Button>
+          ) : null}
           <Button
             type="button"
             variant="ghost"
@@ -249,78 +278,14 @@ export function SourceReview({
           </div>
         ) : (
           <>
-            <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-muted/40 p-3 text-sm">
-              <div className="flex flex-wrap items-center gap-2">
-                <Badge
-                  variant={
-                    snapshot.layout === "layout_a" ? "secondary" : "outline"
-                  }
-                >
-                  {snapshot.layout === "layout_a"
-                    ? "Supported table layout"
-                    : "Unsupported layout"}
-                </Badge>
-                <span className="text-muted-foreground">
-                  {usableCandidates.length} usable ·{" "}
-                  {unresolvedCandidates.length} unresolved ·{" "}
-                  {snapshot.page_count}{" "}
-                  {snapshot.page_count === 1 ? "page" : "pages"}
-                </span>
-              </div>
-              {usableImports.length > 0 ? (
-                <Button
-                  type="button"
-                  size="sm"
-                  disabled={disabled}
-                  onClick={handleApplyAll}
-                >
-                  <HugeiconsIcon
-                    icon={CheckmarkCircle02Icon}
-                    data-icon="inline-start"
-                  />
-                  Apply all usable candidates ({usableImports.length})
-                </Button>
-              ) : null}
-            </div>
-
-            {confirmOverwrite ? (
-              <div
-                role="group"
-                aria-label="Replace entered figures with PDF candidates?"
-                className="rounded-lg border border-border bg-muted/50 p-3 text-sm"
-              >
-                <p className="font-medium">
-                  Replace {overwriteCount} entered{" "}
-                  {overwriteCount === 1 ? "figure" : "figures"} with extracted
-                  PDF candidates?
-                </p>
-                <p className="mt-1 text-muted-foreground">
-                  Replaced figures will be set to the extracted PDF amounts and
-                  marked unreviewed until you confirm them.
-                </p>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  <Button
-                    type="button"
-                    variant="destructive"
-                    size="sm"
-                    disabled={disabled}
-                    onClick={() => {
-                      setConfirmOverwrite(false);
-                      onApplyCandidates(usableImports);
-                    }}
-                  >
-                    Apply and replace
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setConfirmOverwrite(false)}
-                  >
-                    Cancel
-                  </Button>
-                </div>
-              </div>
+            {snapshot.layout !== "layout_a" ? (
+              <Alert>
+                <HugeiconsIcon icon={InformationCircleIcon} />
+                <AlertTitle>Unsupported layout</AlertTitle>
+                <AlertDescription className="col-start-2">
+                  Candidates may be incomplete. Check each figure against the page.
+                </AlertDescription>
+              </Alert>
             ) : null}
 
             {extraction.extraction_message ? (
@@ -333,6 +298,8 @@ export function SourceReview({
               </Alert>
             ) : null}
 
+            <div className="grid gap-5 xl:grid-cols-2 xl:items-start">
+            <div className="flex min-w-0 flex-col gap-5">
             {usableCandidates.length > 0 ? (
               <section
                 className="space-y-2"
@@ -357,7 +324,8 @@ export function SourceReview({
                     return (
                       <li
                         key={key}
-                        className="flex flex-wrap items-center justify-between gap-3 p-3 text-sm"
+                        data-active={isInspected(candidate) || undefined}
+                        className="flex flex-wrap items-center justify-between gap-3 p-3 text-sm data-active:bg-muted/50"
                       >
                         <div className="space-y-1">
                           <div className="flex flex-wrap items-center gap-2">
@@ -444,7 +412,7 @@ export function SourceReview({
                 aria-label="Unresolved extracted candidates"
               >
                 <h3 className="text-sm font-semibold">
-                  Unresolved items — manual review required (
+                  Needs manual review (
                   {unresolvedCandidates.length})
                 </h3>
                 <ul className="divide-y divide-border rounded-lg border border-border">
@@ -453,7 +421,8 @@ export function SourceReview({
                     return (
                       <li
                         key={key}
-                        className="flex flex-wrap items-center justify-between gap-3 p-3 text-sm"
+                        data-active={isInspected(candidate) || undefined}
+                        className="flex flex-wrap items-center justify-between gap-3 p-3 text-sm data-active:bg-muted/50"
                       >
                         <div className="space-y-1">
                           <div className="flex flex-wrap items-center gap-2">
@@ -462,7 +431,6 @@ export function SourceReview({
                                 ? fieldLabel(candidate.field)
                                 : candidate.label}
                             </span>
-                            <Badge variant="outline">Needs manual entry</Badge>
                             {candidate.year_start !== null ? (
                               <Badge variant="outline">
                                 {financialYearLabel(candidate.year_start)}
@@ -522,9 +490,11 @@ export function SourceReview({
               </section>
             ) : null}
 
+            </div>
             {currentPage ? (
               <section
-                className="space-y-3 rounded-lg border border-border p-4"
+                id="source-page-inspector"
+                className="min-w-0 space-y-3 rounded-lg border border-border p-4 xl:sticky xl:top-20 xl:max-h-[calc(100svh-6rem)] xl:overflow-y-auto"
                 aria-label="Source page inspector"
               >
                 <div className="flex flex-wrap items-center justify-between gap-2">
@@ -575,7 +545,7 @@ export function SourceReview({
                       )}
                       target="_blank"
                       rel="noreferrer"
-                      className="text-xs font-medium text-primary underline-offset-4 hover:underline"
+                      className={buttonVariants({ variant: "ghost", size: "sm" })}
                     >
                       Open page {currentPage.page_number} in new tab
                     </a>
@@ -616,7 +586,7 @@ export function SourceReview({
                       extraction.id,
                       currentPage.page_number,
                     )}
-                    title={`${extraction.filename} — Page ${currentPage.page_number}`}
+                    title={`${extraction.filename}, page ${currentPage.page_number}`}
                     className="h-[28rem] w-full rounded-md border border-border bg-background"
                   />
                 ) : null}
@@ -629,7 +599,7 @@ export function SourceReview({
                           Table {table.table_index} (Page{" "}
                           {currentPage.page_number})
                         </p>
-                        <div className="overflow-x-auto rounded-md border border-border">
+                        <div className="overflow-x-auto rounded-md border border-border" tabIndex={0}>
                           <table className="w-full border-collapse text-left text-xs">
                             <tbody>
                               {table.rows.map((row, rowIdx) => {
@@ -704,9 +674,35 @@ export function SourceReview({
                 </details>
               </section>
             ) : null}
+            </div>
           </>
         )}
       </CardContent>
+      <AlertDialog open={confirmOverwrite} onOpenChange={setConfirmOverwrite}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Replace {overwriteCount} entered {overwriteCount === 1 ? "figure" : "figures"} with extracted PDF candidates?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              Replaced figures take the extracted PDF amounts and stay unreviewed until you confirm them.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={disabled}
+              onClick={() => {
+                setConfirmOverwrite(false);
+                onApplyCandidates(usableImports);
+              }}
+            >
+              Apply and replace
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Card>
   );
 }

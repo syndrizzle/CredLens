@@ -1,4 +1,5 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react"
+import { createContext, useContext, useLayoutEffect, useState, type ReactNode } from "react"
+import { flushSync } from "react-dom"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { Moon02Icon, Sun03Icon } from "@hugeicons/core-free-icons"
 
@@ -27,7 +28,8 @@ function ThemeProvider({ children }: { children: ReactNode }) {
     () => THEMES.find((item) => item === localStorage.getItem(STORAGE_KEY)) ?? "system",
   )
 
-  useEffect(() => {
+  // Layout effect so the class is applied inside flushSync during a view transition.
+  useLayoutEffect(() => {
     const media = window.matchMedia("(prefers-color-scheme: dark)")
     const apply = () => {
       // Without this, each component's own colour transition makes the switch ripple unevenly.
@@ -53,7 +55,9 @@ function ThemeProvider({ children }: { children: ReactNode }) {
         theme,
         setTheme: (next) => {
           localStorage.setItem(STORAGE_KEY, next)
-          setTheme(next)
+          // Cross-fade the whole page so light and dark do not swap with a hard brightness jump.
+          if (!document.startViewTransition) return setTheme(next)
+          document.startViewTransition(() => flushSync(() => setTheme(next)))
         },
       }}
     >
@@ -72,9 +76,9 @@ function ModeToggle() {
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
         <DropdownMenuRadioGroup value={theme} onValueChange={(value: Theme) => setTheme(value)}>
-          <DropdownMenuRadioItem value="light">Light</DropdownMenuRadioItem>
-          <DropdownMenuRadioItem value="dark">Dark</DropdownMenuRadioItem>
-          <DropdownMenuRadioItem value="system">System</DropdownMenuRadioItem>
+          <DropdownMenuRadioItem value="light" closeOnClick>Light</DropdownMenuRadioItem>
+          <DropdownMenuRadioItem value="dark" closeOnClick>Dark</DropdownMenuRadioItem>
+          <DropdownMenuRadioItem value="system" closeOnClick>System</DropdownMenuRadioItem>
         </DropdownMenuRadioGroup>
       </DropdownMenuContent>
     </DropdownMenu>

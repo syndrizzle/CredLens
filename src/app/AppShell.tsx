@@ -1,7 +1,8 @@
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
 import { HugeiconsIcon } from "@hugeicons/react";
 
+import { Logo } from "@/components/logo";
 import { ModeToggle } from "@/components/theme";
 import { Separator } from "@/components/ui/separator";
 import {
@@ -17,33 +18,51 @@ import {
   SidebarProvider,
   SidebarRail,
   SidebarTrigger,
+  useSidebar,
 } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { SECTIONS, type Section } from "./sections";
 
 type AppShellProps = {
   section?: Section;
-  email: string | null;
-  status: ReactNode;
+  switcher: ReactNode;
+  account: ReactNode;
+  actions: ReactNode;
   children: ReactNode;
 };
 
-function AppShell({ section, email, status, children }: AppShellProps) {
+// The mobile sheet does not close on navigation by itself and would cover the new section.
+function CloseSheetOnNavigate({ section }: { section?: Section }) {
+  const { setOpenMobile } = useSidebar();
+  useEffect(() => setOpenMobile(false), [section, setOpenMobile]);
+  return null;
+}
+
+function AppShell({ section, switcher, account, actions, children }: AppShellProps) {
   return (
     <TooltipProvider>
       <SidebarProvider className="print:block print:min-h-0 print:bg-white">
+        <CloseSheetOnNavigate section={section} />
+        <a
+          href="#main-content"
+          className="sr-only rounded-md bg-background px-3 py-2 text-sm font-medium shadow-sm ring-1 ring-ring focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50"
+        >
+          Skip to content
+        </a>
         <Sidebar collapsible="icon" variant="inset">
+          <nav aria-label="Main" className="flex min-h-0 flex-1 flex-col">
           <SidebarHeader>
             <SidebarMenu>
               <SidebarMenuItem>
                 <SidebarMenuButton size="lg" tooltip="CredLens" render={<Link to="/" />}>
-                  <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary font-heading text-sm font-semibold text-primary-foreground">
-                    C
+                  <span className="flex size-8 shrink-0 items-center justify-center text-foreground">
+                    <Logo className="size-6!" />
                   </span>
                   <span className="font-heading text-base font-semibold">CredLens</span>
                 </SidebarMenuButton>
               </SidebarMenuItem>
             </SidebarMenu>
+            {switcher}
           </SidebarHeader>
           <SidebarContent>
             <SidebarGroup>
@@ -63,22 +82,19 @@ function AppShell({ section, email, status, children }: AppShellProps) {
               </SidebarMenu>
             </SidebarGroup>
           </SidebarContent>
-          {email ? (
-            <SidebarFooter className="group-data-[collapsible=icon]:hidden">
-              <p className="truncate px-2 text-xs text-muted-foreground">{email}</p>
-            </SidebarFooter>
-          ) : null}
+          <SidebarFooter>{account}</SidebarFooter>
+          </nav>
           <SidebarRail />
         </Sidebar>
-        <SidebarInset className="min-w-0 print:m-0 print:rounded-none print:shadow-none">
-          <header className="sticky top-0 z-10 flex h-14 shrink-0 items-center gap-2 border-b border-border bg-background/80 px-4 backdrop-blur-md md:rounded-t-xl print:hidden">
+        <SidebarInset id="main-content" tabIndex={-1} className="min-w-0 outline-none print:m-0 print:rounded-none print:shadow-none">
+          <header className="sticky top-0 z-10 flex h-14 shrink-0 items-center gap-2 border-b border-border bg-background/80 px-4 backdrop-blur-md [@media(prefers-reduced-transparency:reduce)]:bg-background [@media(prefers-reduced-transparency:reduce)]:backdrop-blur-none md:rounded-t-xl print:hidden">
             <SidebarTrigger className="-ml-1" />
             <Separator orientation="vertical" className="mx-1 h-4 data-vertical:self-center" />
             <h1 className="truncate text-sm font-medium">
               {SECTIONS.find((item) => item.id === section)?.title ?? "CredLens"}
             </h1>
             <div className="ml-auto flex items-center gap-2">
-              {status}
+              {actions}
               <ModeToggle />
             </div>
           </header>

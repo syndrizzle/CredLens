@@ -1,13 +1,13 @@
 import { createRootRoute, createRoute, createRouter, useLocation } from "@tanstack/react-router";
 
-import { ManualEntry } from "@/features/manual-entry/ManualEntry";
+import { Workspace } from "@/features/workspace/Workspace";
 import { SECTIONS } from "./sections";
 
-// shortcut: one long-lived workspace component reads the section from the URL so drafts survive navigation; P6-05 moves each section into its own route component.
+// Routes only pick the visible section; Workspace keeps every section mounted so drafts, Q&A answers and report state survive navigation.
 const rootRoute = createRootRoute({
   component: function Root() {
     const pathname = useLocation({ select: (location) => location.pathname });
-    return <ManualEntry section={SECTIONS.find((item) => item.path === pathname)?.id ?? "overview"} />;
+    return <Workspace section={SECTIONS.find((item) => item.path === pathname)?.id ?? "overview"} />;
   },
 });
 

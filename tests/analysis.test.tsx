@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
+import { AnalysisOverview } from "../src/features/analysis/AnalysisOverview";
 import { AnalysisResults } from "../src/features/analysis/AnalysisResults";
 import { SourceReview } from "../src/features/documents/SourceReview";
 import { WorkspaceQA } from "../src/features/qa/WorkspaceQA";
@@ -8,6 +9,7 @@ import {
   analysisRequest,
   displayDecimal,
   fetchAnalysis,
+  groupIndian,
   type AnalysisResponse,
 } from "../src/features/analysis/api";
 import {
@@ -60,6 +62,34 @@ describe("decimal display", () => {
   ]) {
     test(raw!, () => expect(displayDecimal(raw!)).toBe(expected!));
   }
+});
+
+test("Indian digit grouping keeps decimal text exact", () => {
+  for (const [raw, expected] of [
+    ["0.00", "0.00"],
+    ["999", "999"],
+    ["1234.50", "1,234.50"],
+    ["2500000.00", "25,00,000.00"],
+    ["-12345678.90", "-1,23,45,678.90"],
+  ])
+    expect(groupIndian(raw!)).toBe(expected!);
+});
+
+test("overview cards keep unrelated results when interest is missing and chart only supported years", () => {
+  const form = reviewed();
+  form.periods[1]!.figures.interest_expense = { raw: "", reviewed: false };
+  const html = renderToStaticMarkup(
+    <AnalysisOverview data={engine(form)} onOpenFinding={() => {}} onOpenInput={() => {}} />,
+  );
+  expect(html).toContain("Not assessed");
+  expect(html.match(/>Supported</g)).toHaveLength(5);
+  expect(html).toContain("No result");
+  expect(html.match(/<th scope="row">FY 20/g)).toHaveLength(4);
+  form.periods[0]!.figures.revenue = { raw: "1000000", reviewed: false };
+  const oneYear = renderToStaticMarkup(
+    <AnalysisOverview data={engine(form)} onOpenFinding={() => {}} onOpenInput={() => {}} />,
+  );
+  expect(oneYear).toContain("Trend charts need net profit margin supported in at least two years.");
 });
 
 test("transport preserves raw text, zero, missing, confirmation, and revisions without mutation", () => {
@@ -736,7 +766,7 @@ test("extraction client validates snapshots, runs extraction, and renders Source
   );
   expect(reviewHtml).toContain("Source review · aster-reference.pdf");
   expect(reviewHtml).toContain("Usable candidates (1)");
-  expect(reviewHtml).toContain("Unresolved items — manual review required (1)");
+  expect(reviewHtml).toContain("Needs manual review (1)");
   expect(reviewHtml).toContain("Blank or dash value (kept missing)");
   expect(reviewHtml).toContain('data-selected="true"');
   expect(reviewHtml).toContain(
@@ -1014,7 +1044,7 @@ test("report client validates preparation reports and renders Current vs Superse
   expect(currentHtml).toContain("preparation-report-v1");
   expect(currentHtml).toContain("20.00%");
   expect(currentHtml).toContain("aster-reference.pdf");
-  expect(currentHtml).toContain("Ordered Preparation Actions");
+  expect(currentHtml).toContain("Ordered preparation actions");
 
   const supersededHtml = renderToStaticMarkup(
     <PreparationReportSheet

@@ -5,6 +5,7 @@ import {
   CheckmarkCircle02Icon,
   InformationCircleIcon,
 } from "@hugeicons/core-free-icons";
+import { Logo } from "@/components/logo";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -157,30 +158,20 @@ export function PreparationReportPanel({
     >
       <Card className="print:hidden">
         <CardHeader>
-          <CardTitle id="preparation-report-panel-heading">
-            Preparation report · {businessName}
+          <CardTitle>
+            <h2 id="preparation-report-panel-heading">Preparation report</h2>
           </CardTitle>
           <CardDescription>
-            Generate a printable preparation report for your accountant or
-            lender discussion. Corrections supersede earlier report versions so
-            you can verify which version is current.
+            A printable summary of {businessName} for your accountant or lender
+            discussion. Corrections supersede earlier versions, so you can tell
+            which one is current.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          {hasUnsavedChanges ? (
-            <Alert>
-              <HugeiconsIcon icon={InformationCircleIcon} />
-              <AlertTitle>Unsaved edits present</AlertTitle>
-              <AlertDescription>
-                Save your workspace edits before generating a new preparation
-                report so the report matches your latest figures.
-              </AlertDescription>
-            </Alert>
-          ) : null}
-
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap gap-2">
             <Button
               type="button"
+              size="sm"
               onClick={() => void handleReportRequest()}
               disabled={disabled || loading || hasUnsavedChanges}
             >
@@ -193,6 +184,7 @@ export function PreparationReportPanel({
                 <Button
                   type="button"
                   variant="outline"
+                  size="sm"
                   onClick={() => window.print()}
                   disabled={disabled || loading}
                 >
@@ -201,6 +193,7 @@ export function PreparationReportPanel({
                 <Button
                   type="button"
                   variant="ghost"
+                  size="sm"
                   onClick={() => onActiveReportChange(null)}
                   disabled={loading}
                 >
@@ -209,6 +202,16 @@ export function PreparationReportPanel({
               </>
             ) : null}
           </div>
+          {hasUnsavedChanges ? (
+            <Alert>
+              <HugeiconsIcon icon={InformationCircleIcon} />
+              <AlertTitle>Unsaved edits present</AlertTitle>
+              <AlertDescription>
+                Save your workspace edits before generating a new preparation
+                report so the report matches your latest figures.
+              </AlertDescription>
+            </Alert>
+          ) : null}
 
           {error ? (
             <Alert variant="destructive">
@@ -219,11 +222,11 @@ export function PreparationReportPanel({
           ) : null}
 
           {runs.length > 0 ? (
-            <div className="space-y-2 border-t border-border pt-3">
-              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                Report versions ({runs.length})
-              </p>
-              <ul className="space-y-2">
+            <div className="space-y-2">
+              <h3 className="text-sm font-medium">
+                Versions ({runs.length})
+              </h3>
+              <ul className="divide-y divide-border rounded-lg border border-border">
                 {runs.map((run) => {
                   const version = versionByRunId.get(run.run_id) ?? 1;
                   const isCurrent =
@@ -232,7 +235,7 @@ export function PreparationReportPanel({
                   return (
                     <li
                       key={run.run_id}
-                      className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border px-3 py-2 text-sm"
+                      className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 text-sm"
                     >
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="font-medium">
@@ -240,7 +243,7 @@ export function PreparationReportPanel({
                           {run.input_revision}
                         </span>
                         <Badge
-                          variant={isCurrent ? "secondary" : "destructive"}
+                          variant={isCurrent ? "secondary" : "outline"}
                         >
                           {isCurrent ? "Current" : "Superseded"}
                         </Badge>
@@ -321,12 +324,13 @@ export function PreparationReportSheet({
     <article
       id="preparation-report-sheet"
       aria-labelledby="preparation-report-heading"
-      className="space-y-6 rounded-xl border border-border bg-card p-6 text-card-foreground print:border-0 print:bg-white print:p-0 print:text-black"
+      className="space-y-6 rounded-xl border border-border bg-card p-6 text-card-foreground animate-in duration-200 ease-out fade-in-0 motion-safe:slide-in-from-top-1 print:animate-none print:border-0 print:bg-white print:p-0 print:text-black"
     >
       <header className="space-y-3 border-b border-border pb-4 print-avoid-break">
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div>
-            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            <p className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              <Logo className="size-4 text-foreground print:text-black" />
               CredLens Financial Preparation Report
             </p>
             <h2
@@ -392,8 +396,8 @@ export function PreparationReportSheet({
           <Alert variant="destructive">
             <HugeiconsIcon icon={Alert02Icon} />
             <AlertTitle>
-              Superseded report — Report v{report.report_version} (Input
-              revision {report.input_revision})
+              Report v{report.report_version} (input revision{" "}
+              {report.input_revision}) is superseded
             </AlertTitle>
             <AlertDescription>{supersededMessage}</AlertDescription>
           </Alert>
@@ -413,14 +417,14 @@ export function PreparationReportSheet({
 
       <section className="space-y-4">
         <h3 className="font-heading text-lg font-semibold">
-          1. Six Financial Indicators &amp; Balance-Sheet Consistency
+          1. Six financial indicators and balance-sheet consistency
         </h3>
         {report.analysis.periods.map((period) => (
           <div key={period.year_start} className="space-y-2">
             <h4 className="font-heading text-base font-medium">
               {financialYearLabel(period.year_start)}
             </h4>
-            <div className="overflow-x-auto">
+            <div className="overflow-x-auto" tabIndex={0}>
               <table className="w-full border-collapse text-left text-xs">
                 <thead>
                   <tr className="border-b border-border text-muted-foreground">
@@ -508,10 +512,10 @@ export function PreparationReportSheet({
 
       <section className="space-y-3">
         <h3 className="font-heading text-lg font-semibold">
-          2. Missing, Unreviewed &amp; Blocked Evidence
+          2. Missing, unreviewed and blocked evidence
         </h3>
         {report.missing_evidence.length > 0 ? (
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto" tabIndex={0}>
             <table className="w-full border-collapse text-left text-xs">
               <thead>
                 <tr className="border-b border-border text-muted-foreground">
@@ -556,11 +560,11 @@ export function PreparationReportSheet({
 
       <section className="space-y-3">
         <h3 className="font-heading text-lg font-semibold">
-          3. Ordered Preparation Actions
+          3. Ordered preparation actions
         </h3>
         <p className="text-xs text-muted-foreground">
-          Workflow order (review conflicts first, then missing evidence,
-          interpretation limits, then supported investigation) — not a
+          Workflow order: review conflicts first, then missing evidence,
+          interpretation limits and supported investigation. This is not a
           credit-risk ranking.
         </p>
         {report.analysis.action_version && report.analysis.actions?.length ? (
@@ -594,7 +598,7 @@ export function PreparationReportSheet({
 
       <section className="space-y-4">
         <h3 className="font-heading text-lg font-semibold">
-          4. Submitted Figures, Origins &amp; Review States
+          4. Submitted figures, origins and review states
         </h3>
         {sortedPeriods.map((period) => (
           <div key={period.year_start} className="space-y-2">
@@ -605,7 +609,7 @@ export function PreparationReportSheet({
                 ? "Comparable with prior year"
                 : "Comparability not confirmed / no immediate prior"}
             </h4>
-            <div className="overflow-x-auto">
+            <div className="overflow-x-auto" tabIndex={0}>
               <table className="w-full border-collapse text-left text-xs">
                 <thead>
                   <tr className="border-b border-border text-muted-foreground">
@@ -665,7 +669,7 @@ export function PreparationReportSheet({
 
       <section className="space-y-3 border-t border-border pt-4 print-avoid-break">
         <h3 className="font-heading text-lg font-semibold">
-          5. Source Documents &amp; Limitations
+          5. Source documents and limitations
         </h3>
         {report.documents_referenced.length > 0 ? (
           <ul className="list-disc space-y-1 pl-5 text-xs">

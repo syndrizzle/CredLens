@@ -280,6 +280,14 @@ export function displayDecimal(value: string): string {
   return `${negative && cents !== 0n ? "-" : ""}${cents / 100n}.${String(cents % 100n).padStart(2, "0")}`;
 }
 
+// Indian digit grouping on decimal text, so no value passes through floating point.
+export function groupIndian(text: string): string {
+  const [whole, fraction] = text.split(".");
+  const sign = whole!.startsWith("-") ? "-" : "";
+  const digits = whole!.replace("-", "").replace(/\B(?=(\d{2})*\d{3}$)/g, ",");
+  return `${sign}${digits}${fraction === undefined ? "" : `.${fraction}`}`;
+}
+
 export async function fetchAnalysis(form: FormDraft, signal: AbortSignal): Promise<AnalysisResponse> {
   const response = await fetch("/api/analysis", {
     method: "POST", headers: { "Content-Type": "application/json" },
