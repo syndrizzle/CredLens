@@ -59,7 +59,7 @@ The baseline is the supplied **CredLens-Milestone-One-Report.pdf**, the Group 36
 - One year supports a snapshot; trends require comparable periods.
 - Each finding should connect evidence to action: source/origin, calculation or rule, evidence status, and a useful next step. Missing information must name the analysis it blocks.
 - Excluded from the MVP: loan approval/eligibility prediction, default or credit scores, lender matching, bank/GST/bureau connections, authenticity checks, scanned-PDF OCR, multiple currencies, consolidated groups, forecasting, and scenario simulation.
-- CI/CD and full cloud deployment are future scope. Docker Compose is optional. Do not introduce paid services or external financial-data integrations by default. The user chose (2026-11-26, D-09) Cloudflare Workers AI's free allocation for the assistant model so the app can be deployed.
+- Production runs on the user's Coolify server from `docker-compose.yml` (user decision 2026-11-26), auto-deployed on push to `main`. Do not introduce paid services or external financial-data integrations by default. The user chose (2026-11-26, D-09) Cloudflare Workers AI's free allocation for the assistant model.
 
 ## Stack and current repository
 
@@ -77,7 +77,7 @@ The baseline is the supplied **CredLens-Milestone-One-Report.pdf**, the Group 36
 ### Planned backend from the proposal
 
 - Python + FastAPI + Pydantic, as one application with separate document, financial-analysis, retrieval/RAG, and reporting modules; avoid microservices.
-- PostgreSQL + pgvector, SQLAlchemy, and migrations for structured records and authorised passage retrieval. The user selected Neon-hosted PostgreSQL on 2026-11-12. P2-00 establishes backend connectivity only; application persistence/migrations remain P2-01 and authentication P2-02. The user confirmed FastAPI-managed accounts (original plan) on 2026-11-12; do not switch to Neon Auth by default. Keep database credentials backend-only and use fictional data until access controls exist.
+- PostgreSQL + pgvector, SQLAlchemy, and migrations for structured records and authorised passage retrieval. Production PostgreSQL (pgvector) runs inside the Coolify Docker Compose stack on the user's server (user decision 2026-11-26; Neon, used from 2026-11-12, was retired). Deployment is `docker-compose.yml` on Coolify, auto-deployed from `main`. P2-00 establishes backend connectivity only; application persistence/migrations remain P2-01 and authentication P2-02. The user confirmed FastAPI-managed accounts (original plan) on 2026-11-12; do not switch to Neon Auth by default. Keep database credentials backend-only and use fictional data until access controls exist.
 - pdfplumber for page-level digital-PDF extraction.
 - Python `Decimal` and deterministic rules for financial arithmetic, comparability checks, and dependencies.
 - Sentence Transformers for local embeddings (MiniLM). The assistant model is `@cf/google/gemma-4-26b-a4b-it` on Cloudflare Workers AI behind the token-protected Worker in `worker/` (managed with the pinned `wrangler`); FastAPI keeps retrieval, guardrails and citation checks and calls it through `backend/app/llm.py`. Ollama is no longer used.

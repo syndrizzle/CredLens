@@ -1,0 +1,17 @@
+.git
+node_modules
+dist
+backend
+docs
+tests
+worker
+.agents
+.claude
+.cursor
+.devin
+.github
+.ui-review
+.env*
+!.env.example
+.neon
+*.log

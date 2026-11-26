@@ -23,7 +23,7 @@ def get_engine(*, direct: bool = False) -> Engine:
         raise RuntimeError("DATABASE_URL must be a PostgreSQL connection URL") from None
     if "sslmode" not in url.query:
         url = url.update_query_dict({"sslmode": "require"})
-    # Neon supplies pooling; avoid keeping a second pool of idle connections locally.
+    # Short request-scoped connections; no idle pool held per worker.
     return create_engine(
         url,
         poolclass=NullPool,

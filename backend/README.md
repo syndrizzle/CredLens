@@ -131,27 +131,20 @@ The releases are not yanked and their runtime constraints admit the tested Pytho
 Implementation references: [Pydantic validators](https://docs.pydantic.dev/latest/concepts/validators/), [Pydantic serialization](https://docs.pydantic.dev/latest/concepts/serialization/), and [FastAPI validation errors](https://fastapi.tiangolo.com/tutorial/handling-errors/).
 
 
-## Neon database connection (P2-00)
+## Database connection (P2-00)
 
-The selected Neon project is `solitary-bonus-79407058`, organization `org-aged-wildflower-20828140`, branch `production`. Only Postgres is enabled in the generated root `neon.ts`; Neon Auth, Functions, and other services are not enabled. `neon deploy` applies that service configuration; it does not deploy the React or FastAPI applications.
+Production runs PostgreSQL 17 with pgvector inside the Coolify Docker Compose stack (see the root [README](../README.md#production-deployment-coolify)); the API reaches it as `db:5432` on the stack's private network with `sslmode=disable`. Neon hosted the database until 2026-11-26.
 
-To connect a teammate's checkout, install the Neon CLI (tested `neon@9.4.0`, Node 26.13.1), sign in, then run from the root:
+For local development, put any PostgreSQL 16+ with the `vector` extension in ignored `.env.local` (template: `.env.example`). The backend loads the root `.env`, if present, otherwise `.env.local`; process environment variables take priority, and `PYTHON_DOTENV_DISABLED=1` skips the files (the container sets it).
 
-```bash
-neon init -y --org-id org-aged-wildflower-20828140 --project-id solitary-bonus-79407058 --branch production --services postgres
-neon deploy
-```
-
-The CLI writes connection credentials into ignored `.env.local` (or `.env` if present). `.neon` is also ignored. Use `.env.example` only as a template; never commit real URLs. The backend loads the root `.env`, if present, otherwise `.env.local`; existing process environment variables take priority. Restart the backend after pulling a different branch's variables.
-
-`app/database.py` uses SQLAlchemy with Psycopg 3 over TLS. The application uses pooled `DATABASE_URL` with `NullPool` locally to avoid a second idle pool. Connection attempts have a 10-second timeout, prepared statement caching is disabled for pooling compatibility, and SQL parameters are hidden. Keep `DATABASE_URL_UNPOOLED` for migrations in P2-01. These are server variables, never `VITE_` variables or browser connections. See [Neon's connection guide](https://neon.com/docs/connect/choose-connection) and [SQLAlchemy's Psycopg dialect](https://docs.sqlalchemy.org/en/21/dialects/postgresql.html#module-sqlalchemy.dialects.postgresql.psycopg).
+`app/database.py` uses SQLAlchemy with Psycopg 3 and `NullPool`, so each request opens a short connection and no idle pool is held. TLS defaults to `sslmode=require` unless the URL sets `sslmode`. Connection attempts have a 10-second timeout, prepared statement caching is disabled for pooler compatibility, and SQL parameters are hidden. Alembic uses `DATABASE_URL_UNPOOLED`. These are server variables, never `VITE_` variables or browser connections.
 
 Start FastAPI and Vite using the existing commands, then check `GET /api/health/database` through Vite's `/api` proxy. Success is `{"status":"ok","database":"connected"}`; missing/invalid credentials or connection failures return sanitized HTTP 503. `/api/health` remains a database-independent liveness check.
 
 For opt-in live verification from `backend/`:
 
 ```bash
-RUN_NEON_TESTS=1 .venv/bin/python -m pytest -q
+RUN_NEON_TESTS=1 .venv/bin/python -m pytest -q   # name kept from the Neon era; works with any reachable database
 ```
 
 PowerShell: set `$env:RUN_NEON_TESTS = '1'` and use `.venv\Scripts\python.exe`. The live test writes/reads a fictional decimal in a temporary table inside one transaction, rolls it back, and checks the health API. It creates no permanent application tables. Default tests skip the live check and mock connection configuration/failures.
@@ -163,11 +156,7 @@ New dependencies were checked against the official registries on 2026-11-12 and 
 | SQLAlchemy | 2.1.8 | Python >=3.11 | [PyPI](https://pypi.org/pypi/SQLAlchemy/json) |
 | psycopg + psycopg-binary | 3.3.9 | Python >=3.10 | [PyPI](https://pypi.org/pypi/psycopg/json) |
 | python-dotenv | 1.2.4 | Python >=3.10 | [PyPI](https://pypi.org/pypi/python-dotenv/json) |
-| neon (global CLI) | 9.4.0 | Node >=20.19.0 | [npm](https://www.npmjs.com/package/neon) |
-| @neon/config | 1.14.0 | Node >=20.19.0 | [npm](https://www.npmjs.com/package/@neon/config) |
-| @neon/env | 2.1.3 | Node >=20.19.0 | [npm](https://www.npmjs.com/package/@neon/env) |
 
-The CLI installed Neon plugins/skills at user scope for detected agents and configured their Neon MCP access. Those global installations are not repository content; backend connectivity uses ordinary environment variables and Psycopg and does not require an AI plugin. Bun remains the project package manager and `bun.lock` remains the only JavaScript lockfile.
 
 
 ## Persistence, migrations, authentication, revisions, and documents (P2-01 / P2-02 / P2-04 / P3-01 / P3-02)

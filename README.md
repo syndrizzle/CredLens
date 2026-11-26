@@ -35,7 +35,7 @@ Fictional Aster Components data, captured from Vite with mocked API responses; t
 
 - **Node.js / Bun:** Bun `1.4+` (preserves `bun.lock`)
 - **Python:** Python `3.12+` with `venv` and `pip`. On Debian-based systems, install the matching `venv` package if Python reports that `ensurepip` is unavailable.
-- **PostgreSQL 16+ with `pgvector` (`vector` extension):** Local PostgreSQL or Neon PostgreSQL (`DATABASE_URL` and direct `DATABASE_URL_UNPOOLED`)
+- **PostgreSQL 16+ with `pgvector` (`vector` extension):** any PostgreSQL you can reach (`DATABASE_URL` and direct `DATABASE_URL_UNPOOLED`); production runs it in Docker Compose
 - **Cloudflare account (optional; without it the assistant uses template answers):** Workers AI's free allocation is 10,000 neurons a day. `wrangler` is a pinned dev dependency.
 
 ### 1. Configure database environment
@@ -106,6 +106,18 @@ echo fs.inotify.max_user_instances=1024 | sudo tee /etc/sysctl.d/60-inotify.conf
 
 Without `sudo`, `CHOKIDAR_USEPOLLING=1 bun run dev` makes the watcher poll instead.
 
+## Production deployment (Coolify)
+
+`docker-compose.yml` runs the whole app as one Coolify resource (Docker Compose build pack), live at https://credlens.sahil.lol:
+
+| Service | Image | Reachable from |
+| --- | --- | --- |
+| `web` | root `Dockerfile`: Bun 1.4.4 builds the Vite app, nginx 1.30.8 serves it and proxies `/api` | the internet, via Coolify's Traefik (HTTPS) |
+| `api` | `backend/Dockerfile`: Python 3.14.8, FastAPI, MiniLM baked in, `alembic upgrade head` on start | `web` only, on the stack's private network |
+| `db` | `pgvector/pgvector:0.8.7-pg17`, data in the `pgdata` volume | `api` only |
+
+Uploaded PDFs live in the `documents` volume. The browser talks to one origin, so session cookies stay `HttpOnly`, `SameSite=Lax` and `Secure`; the backend trusts forwarded headers only from nginx. Coolify generates the database user and password (`SERVICE_USER_POSTGRES`, `SERVICE_PASSWORD_POSTGRES`). Set `CREDLENS_AI_URL` and `CREDLENS_AI_TOKEN` under the resource's environment variables; the deployment refuses to start without them. A GitHub push webhook redeploys `main` automatically.
+
 ## Live demonstration walkthrough
 
 This sequence reproduces every item in the [Final demonstration checklist](docs/PROJECT_SPEC.md#final-demonstration-checklist) using the included fictional Aster Components PDFs (`backend/tests/fixtures/pdf_corpus/aster-reference.pdf`):
@@ -127,7 +139,7 @@ Switch or delete businesses from the business menu at the top of the sidebar, si
 | Backend offline suite (`208` pass / `37` live skips) | `cd backend && .venv/bin/python -m pytest -q` |
 | Backend dependency integrity | `cd backend && .venv/bin/pip check` |
 | Schema consistency check | `cd backend && .venv/bin/alembic check` |
-| Live Neon tests (use a **disposable** direct branch URL only; add `RUN_LIVE_MODEL_TESTS=1` to call the Worker) | `cd backend && PERSISTENCE_TEST_URL="<direct-disposable-url>" .venv/bin/python -m pytest -q` |
+| Live database tests (use a **disposable** database only; add `RUN_LIVE_MODEL_TESTS=1` to call the Worker) | `cd backend && PERSISTENCE_TEST_URL="<direct-disposable-url>" .venv/bin/python -m pytest -q` |
 | Frontend unit & Python-integration tests (`47` pass) | `bun test` |
 | Headless browser UI checks (`71` checks) | `bun tests/run-workspace-ui.ts /path/to/chromium-or-chrome` |
 | Frontend lint & production build | `bun x oxlint src/ tests/ && bun run build` |
@@ -172,5 +184,5 @@ Full transitive pins live in [backend/requirements.txt](backend/requirements.txt
 - [docs/LOCAL_MODEL_TRIAL.md](docs/LOCAL_MODEL_TRIAL.md) — Host hardware measurements, offline model settings, and fallback policy
 - [docs/EVALUATION_RESULTS.md](docs/EVALUATION_RESULTS.md) — P5-04 separate extraction results, A/B/C 60-question ablation, and failure analysis
 - [docs/CONTRIBUTION_LOG.md](docs/CONTRIBUTION_LOG.md) — Repository commit and milestone contribution log
-- [backend/README.md](backend/README.md) — Backend API routes, limits, and Neon setup notes
+- [backend/README.md](backend/README.md) — Backend API routes, limits, and database notes
 - [AGENTS.md](AGENTS.md) — Repository engineering rules (with [Ponytail MIT license](docs/third-party/ponytail-LICENSE.txt))
