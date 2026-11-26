@@ -3,7 +3,7 @@
 Runs strictly locally using:
 - Frozen eval-pack-v1 (backend/tests/fixtures/eval_pack/)
 - Offline CPU sentence-transformers/all-MiniLM-L6-v2 (384d, <=220 tokens, top_k=6)
-- Local loopback Ollama (qwen3:4b-instruct, num_ctx=4096, temperature=0, seed=42)
+- Workers AI explanation model through the `worker/` proxy (gemma-4-26b-a4b-it, temperature=0, seed=42, thinking off)
 
 Writes machine-readable metrics to the requested output file.
 """
@@ -34,7 +34,7 @@ for p in (str(TESTS_DIR), str(BACKEND_DIR)):
 
 from app.analysis import analyse
 from app.pdf_processing import inspect_pdf_file
-from app.ollama import call_local_ollama
+from app.llm import call_model
 from app.qa import (
     QAContext,
     _violates_output_guardrails,
@@ -274,8 +274,6 @@ def main() -> None:
         parser.error(f"Output already exists: {output}")
     os.environ.setdefault("HF_HUB_OFFLINE", "1")
     os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
-    os.environ.setdefault("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
-    os.environ.setdefault("OLLAMA_MODEL", "qwen3:4b-instruct")
     manifest = json.loads((EVAL_PACK_DIR / "manifest.json").read_text(encoding="utf-8"))
     cases = json.loads((EVAL_PACK_DIR / "cases.json").read_text(encoding="utf-8"))
     questions = json.loads((EVAL_PACK_DIR / "questions_60.json").read_text(encoding="utf-8"))
@@ -355,14 +353,14 @@ def main() -> None:
         note = None if top_passages else "No matching document passages were retrieved for this filter."
         return top_passages, "ok", note
 
-    # Warm up local Ollama model once before timing
-    call_local_ollama("Reply OK.", "Warmup")
+    # Warm up the explanation model once before timing
+    model_name, _ = call_model("Reply OK.", "Warmup")
     vram_loaded = _gpu_vram_mb()
 
     variant_results: dict[str, list[dict]] = {"A_basic_rag": [], "B_rag_plus_calc": [], "C_full_credlens": []}
     latencies: dict[str, list[float]] = {"A_basic_rag": [], "B_rag_plus_calc": [], "C_full_credlens": []}
 
-    print("3. Scoring 180 A/B/C responses across 60 questions with local Ollama...")
+    print("3. Scoring 180 A/B/C responses across 60 questions with the explanation model...")
     for idx, q in enumerate(questions, start=1):
         case_entry = cases[q["case_id"]]
         req = AnalysisRequest.model_validate(case_entry["request"])
@@ -375,7 +373,7 @@ def main() -> None:
 
         # --- Variant A: Basic RAG ---
         t0 = time.perf_counter()
-        _, ans_a = call_local_ollama(
+        _, ans_a = call_model(
             VARIANT_A_SYSTEM,
             f"Question: {q['question']}\n\nDocument excerpts:\n{doc_block}",
         )
@@ -384,7 +382,7 @@ def main() -> None:
         pages_a = _cited_baseline_pages(ans_a, passages)
         variant_results["A_basic_rag"].append(
             _score_answer(
-                q, ans_a, mode="ollama", cited_fin_count=0, cited_doc_count=len(pages_a),
+                q, ans_a, mode="model", cited_fin_count=0, cited_doc_count=len(pages_a),
                 doc_pages=pages_a,
             )
         )
@@ -392,7 +390,7 @@ def main() -> None:
         # --- Variant B: RAG + naive Python calculations ---
         naive_calc = _naive_calculations_block(req)
         t0 = time.perf_counter()
-        _, ans_b = call_local_ollama(
+        _, ans_b = call_model(
             VARIANT_B_SYSTEM,
             f"Question: {q['question']}\n\n{naive_calc}\n\nDocument excerpts:\n{doc_block}",
         )
@@ -401,7 +399,7 @@ def main() -> None:
         pages_b = _cited_baseline_pages(ans_b, passages)
         variant_results["B_rag_plus_calc"].append(
             _score_answer(
-                q, ans_b, mode="ollama", cited_fin_count=0, cited_doc_count=len(pages_b),
+                q, ans_b, mode="model", cited_fin_count=0, cited_doc_count=len(pages_b),
                 doc_pages=pages_b,
             )
         )
@@ -473,7 +471,7 @@ def main() -> None:
             "valid_citations": sum(r["has_valid_citation"] for r in rows),
             "expected_page_cited": sum(r["expected_page_hit"] is True for r in rows),
             "expected_page_total": sum(r["expected_page_hit"] is not None for r in rows),
-            "ollama_mode_count": sum(1 for r in rows if r["mode"] == "ollama"),
+            "model_mode_count": sum(1 for r in rows if r["mode"] == "model"),
             "fallback_mode_count": sum(1 for r in rows if r["mode"] == "fallback"),
             "deterministic_mode_count": sum(1 for r in rows if r["mode"] == "deterministic"),
             "latency_ms": {
@@ -503,7 +501,7 @@ def main() -> None:
     summary = {
         "pack_version": manifest["pack_version"],
         "run_date": date.today().isoformat(),
-        "model": os.environ["OLLAMA_MODEL"],
+        "model": model_name,
         "embedding_model": EMBEDDING_MODEL_ID,
         "retrieval_top_k": 6,
         "peak_rss_mb": peak_rss_mb,

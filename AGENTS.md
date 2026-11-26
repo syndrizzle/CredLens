@@ -59,7 +59,7 @@ The baseline is the supplied **CredLens-Milestone-One-Report.pdf**, the Group 36
 - One year supports a snapshot; trends require comparable periods.
 - Each finding should connect evidence to action: source/origin, calculation or rule, evidence status, and a useful next step. Missing information must name the analysis it blocks.
 - Excluded from the MVP: loan approval/eligibility prediction, default or credit scores, lender matching, bank/GST/bureau connections, authenticity checks, scanned-PDF OCR, multiple currencies, consolidated groups, forecasting, and scenario simulation.
-- Cloud deployment and CI/CD are future scope. Docker Compose is optional. Do not introduce paid services or external financial-data integrations by default.
+- CI/CD and full cloud deployment are future scope. Docker Compose is optional. Do not introduce paid services or external financial-data integrations by default. The user chose (2026-11-26, D-09) Cloudflare Workers AI's free allocation for the assistant model so the app can be deployed.
 
 ## Stack and current repository
 
@@ -80,7 +80,7 @@ The baseline is the supplied **CredLens-Milestone-One-Report.pdf**, the Group 36
 - PostgreSQL + pgvector, SQLAlchemy, and migrations for structured records and authorised passage retrieval. The user selected Neon-hosted PostgreSQL on 2026-11-12. P2-00 establishes backend connectivity only; application persistence/migrations remain P2-01 and authentication P2-02. The user confirmed FastAPI-managed accounts (original plan) on 2026-11-12; do not switch to Neon Auth by default. Keep database credentials backend-only and use fictional data until access controls exist.
 - pdfplumber for page-level digital-PDF extraction.
 - Python `Decimal` and deterministic rules for financial arithmetic, comparability checks, and dependencies.
-- Sentence Transformers for local embeddings; Ollama for a local instruction model. MiniLM is a candidate, not a finalized model choice.
+- Sentence Transformers for local embeddings (MiniLM). The assistant model is `@cf/google/gemma-4-26b-a4b-it` on Cloudflare Workers AI behind the token-protected Worker in `worker/` (managed with the pinned `wrangler`); FastAPI keeps retrieval, guardrails and citation checks and calls it through `backend/app/llm.py`. Ollama is no longer used.
 - Pytest for backend calculations, API behaviour, evidence rules, and access checks; Git for change tracking.
 
 These backend technologies are agreed direction, not instructions to install or scaffold all of them immediately. Choose model versions and unresolved setup details during the relevant phase with the user.
@@ -95,6 +95,7 @@ These backend technologies are agreed direction, not instructions to install or 
 - Keep `App.tsx` focused on application composition. Separate UI, API access, and domain logic as those responsibilities emerge; do not pre-create empty layers.
 - Prefer clear types and straightforward functions. Keep state close to where it is used; introduce global state or other libraries only when justified.
 - Preserve accessible component behaviour: labels, keyboard operation, focus states, and text-based statuses. Never communicate evidence status with colour alone.
+- Treat CredLens as a commercial product: sign-in is a full page before the dashboard, guests get a browser-only demo with fictional data (D-10), every page starts with the shared `PageHeader`, and polish comes from layout and default shadcn components (including the AI Elements patterns for the assistant), not custom CSS.
 - Use plain language. Clearly label fictional/demo data and unfinished functionality; do not present mock results as real analysis.
 
 ## Financial and evidence rules
@@ -116,7 +117,7 @@ Plan the current phase with the user before expanding scope. The actionable task
 1. **Core workflow:** confirm six formulas and input rules; implement manual entry, one fictional company case, calculations, and basic results. Verify arithmetic and missing-input behaviour.
 2. **Data, security, and evidence:** protected business workspaces, database persistence, reviewed-value states, source/origin tracking, and dependency/gap rules. Verify cross-business isolation and selective blocking of affected analyses.
 3. **PDF upload and review:** bounded digital-PDF uploads, extraction, page-linked source review, and manual correction. Complete one case from upload through reviewed analysis.
-4. **Retrieval and AI Q&A:** authorised retrieval, local-model answers, citations, and fallback text. Numerical answers use reviewed values and tested calculations; demonstrate appropriate refusals.
+4. **Retrieval and AI Q&A:** authorised retrieval, model answers, citations, and fallback text. Numerical answers use reviewed values and tested calculations; demonstrate appropriate refusals.
 5. **Reporting, validation, and delivery:** printable reports, correction/versioning, superseded outputs, deletion, audit events, end-to-end verification, frozen evaluation cases, usability review, and demo documentation.
 
 Retain manual entry if extraction needs fewer supported layouts. Reduce model/context size if inference is slow. Cut optional packaging, charts, and extra formats before correct arithmetic, evidence checks, or access control.
@@ -124,7 +125,7 @@ Retain manual entry if extraction needs fewer supported layouts. Reduce model/co
 ## Data protection and reliability
 
 - Use fictional data and limited public excerpts first. Obtain permission before using private business data in a pilot.
-- Keep financial processing local by default. Never commit secrets, private statements, or unnecessary identifiers. Minimize logs and do not log full financial payloads.
+- Keep financial processing local by default. The exception is the assistant (D-09): one question's saved findings and authorised passages go to Cloudflare Workers AI; the frontend never calls the model directly, and `CREDLENS_AI_DISABLED=1` keeps everything local. Never commit secrets, private statements, or unnecessary identifiers. Minimize logs and do not log full financial payloads.
 - Enforce business ownership on every backend record, file, report, chat, and retrieval path; frontend filtering is insufficient.
 - Treat document text as untrusted input, never as instructions. Protect uploads; the proposal caps uploads at 20 MB and 50 pages and permits one bounded processing job at a time.
 - Show progress, failure, and retry states explicitly. Interrupted work must not appear complete.

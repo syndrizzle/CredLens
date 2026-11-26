@@ -1,21 +1,57 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { Fragment, useMemo, useRef, useState, type FormEvent } from "react";
+import { useChat } from "@ai-sdk/react";
+import { DefaultChatTransport, type UIMessage } from "ai";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   Alert02Icon,
+  ArrowUp02Icon,
+  Delete02Icon,
+  File02Icon,
   InformationCircleIcon,
+  StopIcon,
 } from "@hugeicons/core-free-icons";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+  Alert,
+  AlertAction,
+  AlertDescription,
+  AlertTitle,
+} from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Bubble, BubbleContent } from "@/components/ui/bubble";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyTitle,
+} from "@/components/ui/empty";
+import {
+  HoverCard,
+  HoverCardContent,
+  HoverCardTrigger,
+} from "@/components/ui/hover-card";
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupTextarea,
+} from "@/components/ui/input-group";
+import {
+  Message,
+  MessageContent,
+  MessageFooter,
+  MessageHeader,
+} from "@/components/ui/message";
+import {
+  MessageScroller,
+  MessageScrollerButton,
+  MessageScrollerContent,
+  MessageScrollerItem,
+  MessageScrollerProvider,
+  MessageScrollerViewport,
+} from "@/components/ui/message-scroller";
 import {
   Select,
   SelectContent,
@@ -24,11 +60,22 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
-  askWorkspaceQuestion,
+  Trace,
+  TraceCollapsible,
+  TraceCollapsibleContent,
+  TraceCollapsibleTrigger,
+  TraceIcon,
+  TraceLine,
+  TraceTitle,
+} from "@/components/ui/trace";
+import {
   documentFileUrl,
+  qaErrorMessage,
+  qaStreamUrl,
+  validQAMetadata,
   type DocumentCitation,
   type FinancialCitation,
-  type QAResponse,
+  type QAMetadata,
 } from "../analysis/api";
 import { financialYearLabel } from "../manual-entry/model";
 
@@ -42,14 +89,16 @@ type WorkspaceQAProps = {
   disabled?: boolean;
 };
 
+type QAMessage = UIMessage<never, { qa: QAMetadata }>;
+
 const ALL_YEARS = "all";
 
-function stateBadgeVariant(
-  state: FinancialCitation["state"],
-): "secondary" | "outline" | "destructive" {
-  if (state === "Supported") return "secondary";
-  if (state === "Needs review") return "destructive";
-  return "outline";
+const textOf = (message: QAMessage) =>
+  message.parts.map((part) => (part.type === "text" ? part.text : "")).join("");
+
+function metadataOf(message: QAMessage) {
+  const part = message.parts.find((item) => item.type === "data-qa");
+  return part && validQAMetadata(part.data) ? part.data : null;
 }
 
 export function WorkspaceQA({
@@ -63,27 +112,47 @@ export function WorkspaceQA({
 }: WorkspaceQAProps) {
   const [question, setQuestion] = useState("");
   const [yearFilter, setYearFilter] = useState<string>(ALL_YEARS);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [turns, setTurns] = useState<{ id: number; turn: QAResponse }[]>([]);
-  const nextTurnId = useRef(0);
-  const abortRef = useRef<AbortController | null>(null);
-  const inputRef = useRef<HTMLInputElement | null>(null);
-
-  useEffect(
-    () => () => {
-      abortRef.current?.abort();
-    },
-    [],
+  const [inputError, setInputError] = useState<string | null>(null);
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  // The backend answers one question at a time, so only the latest question and filters are sent.
+  const transport = useMemo(
+    () =>
+      new DefaultChatTransport<QAMessage>({
+        api: qaStreamUrl(businessId),
+        credentials: "same-origin",
+        prepareSendMessagesRequest: ({ messages, body }) => ({
+          body: { question: textOf(messages.at(-1)!).trim(), ...body },
+        }),
+      }),
+    [businessId],
   );
-
+  const {
+    messages,
+    sendMessage,
+    status,
+    error,
+    stop,
+    setMessages,
+    regenerate,
+    clearError,
+  } = useChat<QAMessage>({
+    transport,
+  });
+  const busy = status === "submitted" || status === "streaming";
+  const formBlocked = disabled || busy || hasUnsavedChanges;
   const activeYearFilter =
     yearFilter !== ALL_YEARS &&
     years.some((year) => String(year) === yearFilter)
       ? yearFilter
       : ALL_YEARS;
-
-  const suggestedPrompts = [
+  const yearItems = [
+    { value: ALL_YEARS, label: "All years" },
+    ...years.map((year) => ({
+      value: String(year),
+      label: financialYearLabel(year),
+    })),
+  ];
+  const suggestions = [
     years.length >= 2
       ? "How did net profit margin and revenue growth change?"
       : "Summarize the supported financial indicators.",
@@ -93,396 +162,538 @@ export function WorkspaceQA({
       : []),
   ];
 
-  const yearItems = [
-    { value: ALL_YEARS, label: "All saved years" },
-    ...years.map((year) => ({
-      value: String(year),
-      label: financialYearLabel(year),
-    })),
-  ];
-
-  async function submitQuestion(event: FormEvent) {
-    event.preventDefault();
-    const trimmed = question.trim();
+  function ask(text: string) {
+    const trimmed = text.trim();
     if (!trimmed) {
-      setError("Enter a focused question about your figures or uploaded statements.");
+      setInputError(
+        "Enter a focused question about your figures or uploaded statements.",
+      );
       inputRef.current?.focus();
       return;
     }
-    if (hasUnsavedChanges || disabled || loading) return;
-
-    abortRef.current?.abort();
-    const controller = new AbortController();
-    abortRef.current = controller;
-    setLoading(true);
-    setError(null);
-
-    try {
-      const response = await askWorkspaceQuestion(
-        businessId,
-        {
-          question: trimmed,
-          year_start:
-            activeYearFilter === ALL_YEARS ? null : Number(activeYearFilter),
-        },
-        controller.signal,
-      );
-      if (abortRef.current !== controller) return;
-      const id = nextTurnId.current++;
-      setTurns((current) => [{ id, turn: response }, ...current].slice(0, 10));
-      setQuestion("");
-    } catch (caught) {
-      if (controller.signal.aborted || abortRef.current !== controller) return;
-      setError(
-        caught instanceof Error
-          ? caught.message
-          : "Q&A could not complete. Retry after checking the local backend.",
-      );
-    } finally {
-      if (abortRef.current === controller) {
-        abortRef.current = null;
-        setLoading(false);
-      }
-    }
+    if (formBlocked) return;
+    setInputError(null);
+    clearError();
+    void sendMessage(
+      { text: trimmed },
+      {
+        body:
+          activeYearFilter === ALL_YEARS
+            ? {}
+            : { year_start: Number(activeYearFilter) },
+      },
+    );
+    setQuestion("");
   }
 
-  const formBlocked = disabled || loading || hasUnsavedChanges;
+  function submit(event: FormEvent) {
+    event.preventDefault();
+    ask(question);
+  }
 
   return (
-    <section className="space-y-4" aria-labelledby="qa-heading">
-      <Card>
-        <CardHeader>
-          <CardTitle>
-            <h2 id="qa-heading">Evidence-grounded Q&amp;A</h2>
-          </CardTitle>
-          <CardDescription>
-            Ask about {businessName}&rsquo;s saved indicators, missing inputs or
-            uploaded PDF disclosures. Numbers come from the deterministic
-            analysis for input revision {inputRevision}; without the local
-            model, answers use a template summary.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {hasUnsavedChanges ? (
-            <Alert>
-              <HugeiconsIcon icon={InformationCircleIcon} />
-              <AlertTitle>Unsaved edits present</AlertTitle>
-              <AlertDescription>
-                Save your workspace edits before asking questions so answers
-                match your latest figures.
-              </AlertDescription>
-            </Alert>
-          ) : null}
+    <section aria-labelledby="qa-heading" className="flex flex-col gap-4">
+      <h2 id="qa-heading" className="sr-only">
+        Ask about {businessName}
+      </h2>
+      {hasUnsavedChanges ? (
+        <Alert>
+          <HugeiconsIcon icon={InformationCircleIcon} />
+          <AlertTitle>Unsaved edits present</AlertTitle>
+          <AlertDescription>
+            Save your edits before asking questions so answers match your latest
+            figures.
+          </AlertDescription>
+        </Alert>
+      ) : null}
 
-          <form
-            onSubmit={(event) => void submitQuestion(event)}
-            className="space-y-3"
-            aria-busy={loading}
-          >
-            <div className="grid items-end gap-3 sm:grid-cols-[1fr_12rem_auto]">
-              <div className="space-y-1.5">
-                <Label htmlFor="qa-question">Question</Label>
-                <Input
-                  ref={inputRef}
-                  id="qa-question"
-                  value={question}
-                  onChange={(event) => {
-                    setQuestion(event.target.value);
-                    if (error) setError(null);
-                  }}
-                  maxLength={500}
-                  disabled={formBlocked}
-                  placeholder="What is blocking interest coverage?"
-                  autoComplete="off"
-                />
-              </div>
+      <Card className="h-[min(72svh,760px)] min-h-96 gap-0 py-0">
+        <MessageScrollerProvider autoScroll>
+          <MessageScroller className="flex-1">
+            <MessageScrollerViewport>
+              <MessageScrollerContent className="mx-auto w-full max-w-3xl px-4 py-6">
+                {messages.length === 0 ? (
+                  <Empty className="my-auto">
+                    <EmptyHeader>
+                      <EmptyTitle>Ask about {businessName}</EmptyTitle>
+                      <EmptyDescription>
+                        Answers quote your saved analysis for input revision{" "}
+                        {inputRevision} and cite the document pages they use.
+                      </EmptyDescription>
+                    </EmptyHeader>
+                    <EmptyContent className="flex-row flex-wrap justify-center">
+                      {suggestions.map((prompt) => (
+                        <Button
+                          key={prompt}
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-auto rounded-full py-1.5 whitespace-normal"
+                          disabled={formBlocked}
+                          onClick={() => ask(prompt)}
+                        >
+                          {prompt}
+                        </Button>
+                      ))}
+                    </EmptyContent>
+                  </Empty>
+                ) : (
+                  messages.map((message) => (
+                    <MessageScrollerItem
+                      key={message.id}
+                      messageId={message.id}
+                      scrollAnchor={message.role === "user"}
+                    >
+                      {message.role === "user" ? (
+                        <Message align="end">
+                          <MessageContent>
+                            <Bubble align="end" variant="muted">
+                              <BubbleContent className="whitespace-pre-line">
+                                {textOf(message)}
+                              </BubbleContent>
+                            </Bubble>
+                          </MessageContent>
+                        </Message>
+                      ) : (
+                        <AssistantMessage
+                          message={message}
+                          businessId={businessId}
+                          currentRevision={inputRevision}
+                        />
+                      )}
+                    </MessageScrollerItem>
+                  ))
+                )}
+                {status === "submitted" ? (
+                  <MessageScrollerItem messageId="pending">
+                    <Message>
+                      <MessageContent>
+                        <p
+                          role="status"
+                          className="animate-pulse text-muted-foreground motion-reduce:animate-none"
+                        >
+                          Checking saved analysis and authorised passages…
+                        </p>
+                      </MessageContent>
+                    </Message>
+                  </MessageScrollerItem>
+                ) : null}
+                {error ? (
+                  <Alert variant="destructive">
+                    <HugeiconsIcon icon={Alert02Icon} />
+                    <AlertTitle>Question could not be answered</AlertTitle>
+                    <AlertDescription>{qaErrorMessage(error)}</AlertDescription>
+                    <AlertAction>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={formBlocked}
+                        onClick={() => void regenerate()}
+                      >
+                        Retry
+                      </Button>
+                    </AlertAction>
+                  </Alert>
+                ) : null}
+              </MessageScrollerContent>
+            </MessageScrollerViewport>
+            <MessageScrollerButton />
+          </MessageScroller>
+        </MessageScrollerProvider>
 
-              <div className="space-y-1.5">
-                <Label htmlFor="qa-year-filter">Year scope</Label>
-                <Select<string>
-                  id="qa-year-filter"
-                  items={yearItems}
-                  value={activeYearFilter}
-                  disabled={formBlocked}
-                  onValueChange={(value) => {
-                    if (value !== null) setYearFilter(value);
-                  }}
-                >
-                  <SelectTrigger className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {yearItems.map((item) => (
-                      <SelectItem key={item.value} value={item.value}>
-                        {item.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <Button type="submit" disabled={formBlocked}>
-                {loading ? "Assembling answer…" : "Ask question"}
-              </Button>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2">
-              {turns.length > 0 ? (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={loading}
-                  onClick={() => setTurns([])}
-                >
-                  Clear answers
-                </Button>
-              ) : null}
-              <span
-                role="status"
-                aria-live="polite"
-                className="text-xs text-muted-foreground"
-              >
-                {loading
-                  ? "Checking saved analysis and authorised passages…"
-                  : ""}
-              </span>
-            </div>
-          </form>
-
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-xs text-muted-foreground">
-              Suggested prompts:
-            </span>
-            {suggestedPrompts.map((prompt) => (
-              <Button
-                key={prompt}
-                type="button"
-                variant="outline"
-                size="xs"
+        <form
+          onSubmit={submit}
+          aria-busy={busy}
+          className="border-t border-border p-3"
+        >
+          <InputGroup className="mx-auto max-w-3xl">
+            <InputGroupTextarea
+              ref={inputRef}
+              id="qa-question"
+              aria-label="Question"
+              aria-invalid={inputError ? true : undefined}
+              aria-describedby={inputError ? "qa-question-error" : undefined}
+              value={question}
+              onChange={(event) => {
+                setQuestion(event.target.value);
+                if (inputError) setInputError(null);
+              }}
+              onKeyDown={(event) => {
+                if (
+                  event.key === "Enter" &&
+                  !event.shiftKey &&
+                  !event.nativeEvent.isComposing
+                ) {
+                  event.preventDefault();
+                  event.currentTarget.form?.requestSubmit();
+                }
+              }}
+              maxLength={500}
+              rows={2}
+              disabled={formBlocked}
+              placeholder="What is blocking interest coverage?"
+              autoComplete="off"
+            />
+            <InputGroupAddon align="block-end">
+              <Select<string>
+                items={yearItems}
+                value={activeYearFilter}
                 disabled={formBlocked}
-                onClick={() => {
-                  setQuestion(prompt);
-                  setError(null);
-                  inputRef.current?.focus();
+                onValueChange={(value) => {
+                  if (value !== null) setYearFilter(value);
                 }}
               >
-                {prompt}
-              </Button>
-            ))}
-          </div>
-
-          {error ? (
-            <Alert variant="destructive">
-              <HugeiconsIcon icon={Alert02Icon} />
-              <AlertTitle>Question could not be answered</AlertTitle>
-              <AlertDescription>{error}</AlertDescription>
-            </Alert>
+                <SelectTrigger
+                  size="sm"
+                  id="qa-year-filter"
+                  aria-label="Year scope"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {yearItems.map((item) => (
+                    <SelectItem key={item.value} value={item.value}>
+                      {item.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {messages.length > 0 ? (
+                <InputGroupButton
+                  type="button"
+                  variant="ghost"
+                  size="xs"
+                  disabled={busy}
+                  onClick={() => setMessages([])}
+                >
+                  <HugeiconsIcon icon={Delete02Icon} />
+                  Clear answers
+                </InputGroupButton>
+              ) : null}
+              {busy ? (
+                <InputGroupButton
+                  type="button"
+                  variant="default"
+                  size="icon-sm"
+                  className="ml-auto rounded-full"
+                  onClick={() => void stop()}
+                >
+                  <HugeiconsIcon icon={StopIcon} />
+                  <span className="sr-only">Stop</span>
+                </InputGroupButton>
+              ) : (
+                <InputGroupButton
+                  type="submit"
+                  variant="default"
+                  size="icon-sm"
+                  className="ml-auto rounded-full"
+                  disabled={formBlocked}
+                >
+                  <HugeiconsIcon icon={ArrowUp02Icon} />
+                  <span className="sr-only">Ask question</span>
+                </InputGroupButton>
+              )}
+            </InputGroupAddon>
+          </InputGroup>
+          {inputError ? (
+            <p
+              id="qa-question-error"
+              role="alert"
+              className="mx-auto mt-2 max-w-3xl text-sm text-destructive"
+            >
+              {inputError}
+            </p>
           ) : null}
-
-          {turns.length > 0 ? (
-            <div className="space-y-4 pt-2">
-              {turns.map(({ id, turn }) => (
-                <QATurnCard
-                  key={id}
-                  businessId={businessId}
-                  currentRevision={inputRevision}
-                  turn={turn}
-                />
-              ))}
-            </div>
-          ) : null}
-        </CardContent>
+        </form>
       </Card>
     </section>
   );
 }
 
-function QATurnCard({
+function AssistantMessage({
+  message,
   businessId,
   currentRevision,
-  turn,
 }: {
+  message: QAMessage;
   businessId: string;
   currentRevision: number;
-  turn: QAResponse;
 }) {
-  const isSuperseded = turn.input_revision < currentRevision;
-  const citedFin = turn.financial_citations.filter((c) => c.cited);
-  const uncitedFin = turn.financial_citations.filter((c) => !c.cited);
-  const citedDocs = turn.document_citations.filter((c) => c.cited);
-  const otherDocs = turn.document_citations.filter((c) => !c.cited);
+  const qa = metadataOf(message);
+  const text = textOf(message);
+  if (!qa) {
+    return (
+      <Message>
+        <MessageContent>
+          <p className="whitespace-pre-line">{text}</p>
+        </MessageContent>
+      </Message>
+    );
+  }
+  const citedFin = qa.financial_citations.filter((c) => c.cited);
+  const citedDocs = qa.document_citations.filter((c) => c.cited);
+  const uncitedFin = qa.financial_citations.filter((c) => !c.cited);
+  const otherDocs = qa.document_citations.filter((c) => !c.cited);
+  const byId = new Map<string, FinancialCitation | DocumentCitation>(
+    [...qa.financial_citations, ...qa.document_citations].map((c) => [
+      c.citation_id,
+      c,
+    ]),
+  );
 
   return (
-    <article className="space-y-3 rounded-lg border border-border p-4 animate-in duration-200 ease-out fade-in-0 motion-safe:slide-in-from-top-1">
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <h3 className="font-heading text-base font-medium">{turn.question}</h3>
-        <div className="flex flex-wrap items-center gap-1.5">
-          <Badge variant={turn.mode === "ollama" ? "secondary" : "outline"}>
-            {turn.mode === "ollama"
-              ? `Local model (${turn.model ?? "ollama"})`
-              : turn.mode === "deterministic" ? "Deterministic answer" : "Template fallback"}
+    <Message>
+      <MessageContent className="gap-3">
+        <MessageHeader className="flex-wrap gap-1.5 px-0">
+          <Badge variant={qa.mode === "model" ? "secondary" : "outline"}>
+            {qa.mode === "model"
+              ? "Gemma 4"
+              : qa.mode === "deterministic"
+                ? "Deterministic answer"
+                : "Template fallback"}
           </Badge>
-          <Badge variant="outline">
-            Input revision {turn.input_revision}
-          </Badge>
-          {isSuperseded ? (
+          <Badge variant="outline">Input revision {qa.input_revision}</Badge>
+          {qa.input_revision < currentRevision ? (
             <Badge variant="destructive">
               Superseded by Rev {currentRevision}
             </Badge>
           ) : null}
-        </div>
-      </div>
+        </MessageHeader>
 
-      {turn.mode === "fallback" && turn.fallback_reason ? (
-        <Alert>
-          <HugeiconsIcon icon={InformationCircleIcon} />
-          <AlertTitle>Local explanation model unavailable</AlertTitle>
-          <AlertDescription>{turn.fallback_reason}</AlertDescription>
-        </Alert>
-      ) : null}
+        {qa.mode === "fallback" && qa.fallback_reason ? (
+          <Alert>
+            <HugeiconsIcon icon={InformationCircleIcon} />
+            <AlertTitle>Explanation model unavailable</AlertTitle>
+            <AlertDescription>{qa.fallback_reason}</AlertDescription>
+          </Alert>
+        ) : null}
 
-      {turn.retrieval_note ? (
-        <p className="text-xs text-muted-foreground">{turn.retrieval_note}</p>
-      ) : null}
-
-      <div className="whitespace-pre-line text-sm leading-relaxed text-foreground">
-        {turn.answer}
-      </div>
-
-      {citedFin.length > 0 ? (
-        <div className="space-y-2 border-t border-border pt-3">
-          <h4 className="text-xs font-medium text-muted-foreground">
-            Cited financial evidence ({turn.rule_version})
-          </h4>
-          <ul className="space-y-2">
-            {citedFin.map((cit) => (
-              <FinancialCitationRow key={cit.citation_id} citation={cit} />
-            ))}
-          </ul>
-        </div>
-      ) : null}
-
-      {citedDocs.length > 0 ? (
-        <div className="space-y-2 border-t border-border pt-3">
-          <h4 className="text-xs font-medium text-muted-foreground">
-            Cited document passages
-          </h4>
-          <ul className="space-y-2">
-            {citedDocs.map((doc) => (
-              <DocumentCitationRow
-                key={doc.citation_id}
+        <div className="text-sm leading-relaxed whitespace-pre-line">
+          {text.split(/(\[[FD][1-9][0-9]*\])/).map((segment, index) => {
+            const citation = byId.get(segment.slice(1, -1));
+            return citation ? (
+              <CitationChip
+                key={index}
+                citation={citation}
                 businessId={businessId}
-                citation={doc}
               />
-            ))}
-          </ul>
+            ) : (
+              <Fragment key={index}>{segment}</Fragment>
+            );
+          })}
         </div>
-      ) : null}
 
-      {uncitedFin.length > 0 || otherDocs.length > 0 ? (
-        <details className="border-t border-border pt-2 text-xs text-muted-foreground">
-          <summary className="cursor-pointer font-medium">
-            Additional workspace evidence checked ({uncitedFin.length} financial
-            {otherDocs.length > 0 ? `, ${otherDocs.length} document` : ""})
-          </summary>
-          <div className="mt-2 space-y-3">
-            {uncitedFin.length > 0 ? (
-              <ul className="space-y-2">
-                {uncitedFin.map((cit) => (
-                  <FinancialCitationRow key={cit.citation_id} citation={cit} />
-                ))}
-              </ul>
-            ) : null}
-            {otherDocs.length > 0 ? (
-              <ul className="space-y-2">
-                {otherDocs.map((doc) => (
-                  <DocumentCitationRow
-                    key={doc.citation_id}
-                    businessId={businessId}
-                    citation={doc}
-                  />
-                ))}
-              </ul>
-            ) : null}
-          </div>
-        </details>
-      ) : null}
+        {qa.retrieval_note ? (
+          <p className="text-xs text-muted-foreground">{qa.retrieval_note}</p>
+        ) : null}
 
-      {turn.limitations.length > 0 ? (
-        <p className="border-t border-border pt-2 text-xs text-muted-foreground">
-          {turn.limitations[turn.limitations.length - 1]}
-        </p>
-      ) : null}
-    </article>
+        {citedFin.length + citedDocs.length > 0 ? (
+          <Trace>
+            <TraceCollapsible>
+              <TraceCollapsibleTrigger>
+                <TraceLine>
+                  <TraceIcon>
+                    <HugeiconsIcon icon={File02Icon} />
+                  </TraceIcon>
+                  <TraceTitle>
+                    Used {citedFin.length + citedDocs.length}{" "}
+                    {citedFin.length + citedDocs.length === 1
+                      ? "source"
+                      : "sources"}
+                  </TraceTitle>
+                </TraceLine>
+              </TraceCollapsibleTrigger>
+              <TraceCollapsibleContent>
+                <ul className="flex flex-col gap-2">
+                  {citedFin.map((cit) => (
+                    <FinancialSource
+                      key={cit.citation_id}
+                      citation={cit}
+                      ruleVersion={qa.rule_version}
+                    />
+                  ))}
+                  {citedDocs.map((doc) => (
+                    <DocumentSource
+                      key={doc.citation_id}
+                      citation={doc}
+                      businessId={businessId}
+                    />
+                  ))}
+                </ul>
+              </TraceCollapsibleContent>
+            </TraceCollapsible>
+          </Trace>
+        ) : null}
+
+        {uncitedFin.length + otherDocs.length > 0 ? (
+          <Trace>
+            <TraceCollapsible>
+              <TraceCollapsibleTrigger>
+                <TraceLine>
+                  <TraceTitle>
+                    Also checked ({uncitedFin.length} financial
+                    {otherDocs.length > 0
+                      ? `, ${otherDocs.length} document`
+                      : ""}
+                    )
+                  </TraceTitle>
+                </TraceLine>
+              </TraceCollapsibleTrigger>
+              <TraceCollapsibleContent>
+                <ul className="flex flex-col gap-2">
+                  {uncitedFin.map((cit) => (
+                    <FinancialSource
+                      key={cit.citation_id}
+                      citation={cit}
+                      ruleVersion={qa.rule_version}
+                    />
+                  ))}
+                  {otherDocs.map((doc) => (
+                    <DocumentSource
+                      key={doc.citation_id}
+                      citation={doc}
+                      businessId={businessId}
+                    />
+                  ))}
+                </ul>
+              </TraceCollapsibleContent>
+            </TraceCollapsible>
+          </Trace>
+        ) : null}
+
+        {qa.limitations.length > 0 ? (
+          <MessageFooter className="px-0 font-normal">
+            {qa.limitations[qa.limitations.length - 1]}
+          </MessageFooter>
+        ) : null}
+      </MessageContent>
+    </Message>
   );
 }
 
-function FinancialCitationRow({ citation }: { citation: FinancialCitation }) {
+function CitationChip({
+  citation,
+  businessId,
+}: {
+  citation: FinancialCitation | DocumentCitation;
+  businessId: string;
+}) {
+  const isDocument = "excerpt" in citation;
   return (
-    <li className="space-y-1 rounded-md border border-border/70 p-2.5 text-xs">
-      <div className="flex flex-wrap items-center gap-2">
-        <Badge variant="outline" className="font-mono">
-          [{citation.citation_id}]
-        </Badge>
-        <span className="font-medium text-foreground">
-          {citation.label} · {financialYearLabel(citation.year_start)}
-        </span>
-        <Badge variant={stateBadgeVariant(citation.state)}>
+    <HoverCard>
+      <HoverCardTrigger
+        delay={10}
+        closeDelay={100}
+        render={
+          <Button
+            type="button"
+            variant="secondary"
+            size="xs"
+            className="mx-0.5 h-5 px-1.5 align-baseline font-mono"
+          />
+        }
+      >
+        [{citation.citation_id}]
+      </HoverCardTrigger>
+      <HoverCardContent className="flex w-72 flex-col gap-1.5 text-sm">
+        {isDocument ? (
+          <>
+            <p className="font-medium">
+              {citation.filename}, p. {citation.page_number}
+            </p>
+            <p className="text-muted-foreground">
+              &ldquo;{citation.excerpt}&rdquo;
+            </p>
+            <a
+              href={documentFileUrl(
+                businessId,
+                citation.document_id,
+                citation.page_number,
+              )}
+              target="_blank"
+              rel="noreferrer"
+              className="text-xs text-muted-foreground underline-offset-4 hover:underline"
+            >
+              Open PDF page {citation.page_number}
+              <span className="sr-only"> (opens in a new tab)</span>
+            </a>
+          </>
+        ) : (
+          <>
+            <p className="font-medium">{citation.label}</p>
+            <p className="text-muted-foreground">{citation.summary}</p>
+          </>
+        )}
+      </HoverCardContent>
+    </HoverCard>
+  );
+}
+
+function FinancialSource({
+  citation,
+  ruleVersion,
+}: {
+  citation: FinancialCitation;
+  ruleVersion: string;
+}) {
+  return (
+    <li className="flex flex-col gap-1 text-xs">
+      <span className="flex flex-wrap items-center gap-1.5 text-foreground">
+        <span className="font-mono">[{citation.citation_id}]</span>
+        <span className="font-medium">{citation.label}</span>
+        {citation.year_start !== null ? (
+          <span>{financialYearLabel(citation.year_start)}</span>
+        ) : null}
+        <Badge
+          variant={citation.state === "Supported" ? "secondary" : "outline"}
+        >
           {citation.state}
         </Badge>
         {citation.value_display ? (
-          <span className="font-mono font-medium text-foreground">
-            {citation.value_display}
-          </span>
+          <span className="tabular-nums">{citation.value_display}</span>
         ) : null}
-      </div>
-      {citation.reasons.length > 0 ? (
-        <p className="text-muted-foreground">{citation.reasons.join(" ")}</p>
-      ) : null}
+      </span>
       {citation.origins.length > 0 ? (
-        <p className="text-muted-foreground">
-          Sources: {citation.origins.join("; ")}
-        </p>
+        <span>{citation.origins.join("; ")}</span>
       ) : null}
+      {citation.reasons.map((reason) => (
+        <span key={reason}>{reason}</span>
+      ))}
+      <span className="sr-only">Rules {ruleVersion}</span>
     </li>
   );
 }
 
-function DocumentCitationRow({
-  businessId,
+function DocumentSource({
   citation,
+  businessId,
 }: {
-  businessId: string;
   citation: DocumentCitation;
+  businessId: string;
 }) {
   return (
-    <li className="space-y-1 rounded-md border border-border/70 p-2.5 text-xs">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex flex-wrap items-center gap-2">
-          <Badge variant="outline" className="font-mono">
-            [{citation.citation_id}]
-          </Badge>
-          <span className="font-medium text-foreground">
-            {citation.filename} · p. {citation.page_number}
-            {citation.section ? ` · ${citation.section}` : ""}
+    <li className="flex flex-col gap-1 text-xs">
+      <a
+        href={documentFileUrl(
+          businessId,
+          citation.document_id,
+          citation.page_number,
+        )}
+        target="_blank"
+        rel="noreferrer"
+        className="flex flex-wrap items-center gap-1.5 font-medium text-foreground underline-offset-4 hover:underline"
+      >
+        <span className="font-mono">[{citation.citation_id}]</span>
+        {citation.filename}, p. {citation.page_number}
+        {citation.section ? (
+          <span className="font-normal text-muted-foreground">
+            {citation.section}
           </span>
-        </div>
-        <a
-          href={documentFileUrl(
-            businessId,
-            citation.document_id,
-            citation.page_number,
-          )}
-          target="_blank"
-          rel="noreferrer"
-          className="shrink-0 font-medium underline underline-offset-4"
-        >
-          Open page {citation.page_number}
-        </a>
-      </div>
-      <p className="whitespace-pre-line text-muted-foreground">
-        {citation.excerpt}
-      </p>
+        ) : null}
+        <span className="sr-only"> (opens in a new tab)</span>
+      </a>
+      <span className="line-clamp-3">&ldquo;{citation.excerpt}&rdquo;</span>
     </li>
   );
 }

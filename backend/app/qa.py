@@ -1,9 +1,10 @@
-"""Evidence-grounded workspace Q&A using deterministic Python outputs, authorised retrieval, and local Ollama with template fallback."""
+"""Evidence-grounded workspace Q&A using deterministic Python outputs, authorised retrieval, and the Workers AI explanation model with template fallback."""
 
 from dataclasses import dataclass
+import json
 from decimal import Decimal, ROUND_HALF_UP
 import re
-from typing import Callable
+from typing import Callable, Iterator
 from uuid import UUID
 
 from sqlalchemy import select
@@ -14,7 +15,7 @@ from app.audit import record_audit_event
 from app.financial_dates import format_financial_year
 from app.models import documents
 from app.documents import reconcile_interrupted_documents
-from app.ollama import OllamaUnavailableError, call_local_ollama
+from app.llm import ModelUnavailableError, call_model
 from app.persistence import load_workspace_analysis
 from app.workspace_access import document_scope, require_document
 from app.retrieval import EmbeddingUnavailableError, retrieve_passages
@@ -90,6 +91,8 @@ DOCUMENT_PATTERN = re.compile(
     re.I,
 )
 CITATION_TAG_RE = re.compile(r"\[([FD][1-9][0-9]*)\]")
+# Some models group citations ("[D3, D5]"); split them so each ID is verified on its own.
+GROUPED_CITATIONS_RE = re.compile(r"\[((?:[FD][1-9][0-9]*\s*[,;]\s*)+[FD][1-9][0-9]*)\]")
 NEGATION_REFUSAL_RE = re.compile(
     r"\b(cannot|can't|unable\s+to|does\s+not|do\s+not|don't|never|refuse|not\s+able|out\s+of\s+scope|will\s+not|won't|no\s+credit\s+score|not\s+predict|not\s+assign|not\s+guarantee|not\s+authenticate)\b",
     re.I,
@@ -448,8 +451,12 @@ def _verify_and_mark_citations(
             return match.group(0)
         return ""
 
+    answer = GROUPED_CITATIONS_RE.sub(
+        lambda match: " ".join(f"[{cid}]" for cid in re.split(r"\s*[,;]\s*", match.group(1))), answer
+    )
     cleaned = CITATION_TAG_RE.sub(_replace, answer)
-    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned).strip()
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    cleaned = re.sub(r"[ \t]+([.,;:])(?=\s|$)", r"\1", cleaned).strip()
 
     marked_fin = [
         c.model_copy(update={"cited": c.citation_id in cited_ids})
@@ -609,7 +616,7 @@ def answer_workspace_question(
     document_selected: bool = False,
     llm_caller: Callable[[str, str], tuple[str, str]] | None = None,
 ) -> QAResponse:
-    """Assemble verified citations and answer via local Ollama or deterministic template fallback."""
+    """Assemble verified citations and answer via the explanation model or deterministic template fallback."""
     financial_citations = _build_financial_citations(context.analysis, year_start)
     intent = QuestionIntent.classify(question, document_selected)
     # Keep PDF candidates out of questions about saved calculations alone.
@@ -620,7 +627,7 @@ def answer_workspace_question(
         or intent.cause
     ):
         document_citations = _build_document_citations(context.passages)
-    caller = llm_caller if llm_caller is not None else call_local_ollama
+    caller = llm_caller if llm_caller is not None else call_model
     mode: str = "deterministic"
     model_name: str | None = None
     fallback_reason: str | None = None
@@ -649,16 +656,16 @@ def answer_workspace_question(
             model_name, answer_text = caller(SYSTEM_PROMPT, user_prompt)
             if _violates_output_guardrails(answer_text):
                 document_citations = []
-                raise OllamaUnavailableError(
+                raise ModelUnavailableError(
                     "Model output violated CredLens lending/scoring guardrails; reverted to deterministic summary."
                 )
-            mode = "ollama"
-        except OllamaUnavailableError as exc:
+            mode = "model"
+        except ModelUnavailableError as exc:
             mode = "fallback"
             model_name = None
             fallback_reason = str(exc)
 
-    if mode != "ollama":
+    if mode != "model":
         answer_text = build_fallback_answer(
             context,
             intent,
@@ -670,7 +677,7 @@ def answer_workspace_question(
 
     verified_answer, marked_fin, marked_doc = _verify_and_mark_citations(
         answer_text, financial_citations, document_citations,
-        {cit.citation_id for cit in (prompt_citations if mode == "ollama" else financial_citations)},
+        {cit.citation_id for cit in (prompt_citations if mode == "model" else financial_citations)},
     )
     limitations = [*context.analysis.limitations, QA_SCOPE_LIMITATION]
 
@@ -688,3 +695,28 @@ def answer_workspace_question(
         document_citations=marked_doc,
         limitations=limitations,
     )
+
+
+def ui_message_stream(response: QAResponse, business_id: UUID) -> Iterator[str]:
+    """Replay a checked answer as AI SDK UI message stream events (D-11): nothing unverified is ever sent."""
+
+    def event(chunk: object) -> str:
+        return f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+
+    yield event({"type": "start"})
+    # Citations, mode and fallback reason arrive first so the UI can render them with the text.
+    yield event({"type": "data-qa", "data": response.model_dump(mode="json", exclude={"answer"})})
+    yield event({"type": "text-start", "id": "answer"})
+    for piece in re.findall(r"\s*\S+", response.answer):
+        yield event({"type": "text-delta", "id": "answer", "delta": piece})
+    yield event({"type": "text-end", "id": "answer"})
+    for cit in response.document_citations:
+        if cit.cited:
+            yield event({
+                "type": "source-url",
+                "sourceId": cit.citation_id,
+                "url": f"/api/businesses/{business_id}/documents/{cit.document_id}/file#page={cit.page_number}",
+                "title": f"{cit.filename}, p. {cit.page_number}",
+            })
+    yield event({"type": "finish"})
+    yield "data: [DONE]\n\n"

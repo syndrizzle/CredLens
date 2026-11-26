@@ -129,7 +129,7 @@ def test_document_evaluation_requires_an_actual_citation_to_the_expected_page():
     ]:
         pages = _cited_baseline_pages(answer, passages)
         score = _score_answer(
-            question, answer, mode="ollama", cited_fin_count=0,
+            question, answer, mode="model", cited_fin_count=0,
             cited_doc_count=len(pages), doc_pages=pages,
         )
         assert score["passed"] is passes

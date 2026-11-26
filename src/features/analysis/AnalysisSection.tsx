@@ -1,7 +1,8 @@
 import { AnalysisResults } from "./AnalysisResults";
+import { PageHeader } from "@/components/page-header";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Spinner } from "@/components/ui/spinner";
 import { useWorkspace } from "@/features/workspace/use-workspace";
 
 function AnalysisSection() {
@@ -12,61 +13,44 @@ function AnalysisSection() {
     analysis,
     savedClean,
     displayedAnalysis,
+    analysisOutdated,
     analyseFigures,
   } = useWorkspace();
+  const busy = analysis.loading || workspaceBusy;
 
   return (
     <>
-      <Card size="sm" aria-label="Run analysis" aria-busy={analysis.loading || workspaceBusy}>
-        <CardHeader>
-          <CardTitle>
-            <p role="status" aria-live="polite" className="font-sans text-sm font-medium">
-              {analysis.loading || workspaceBusy
-                ? "Calculating from the submitted figures…"
-                : analysis.stale ||
-                    (activeWorkspace !== null &&
-                      activeWorkspace.form !== form &&
-                      activeWorkspace.analysis !== null)
-                  ? "Entries changed. Previous results are hidden; review and analyse again."
-                  : savedClean &&
-                      activeWorkspace &&
-                      activeWorkspace.analysis === null &&
-                      activeWorkspace.runs.some((run) => run.superseded)
-                    ? `Saved revision ${activeWorkspace.revision} supersedes earlier analysis runs. Review and analyse again to refresh results.`
-                    : displayedAnalysis
-                      ? "Analysis complete."
-                      : "No analysis yet."}
-            </p>
-          </CardTitle>
-          <CardDescription>
-            Unconfirmed or missing inputs remain visible as evidence gaps.
-            Analysis does not confirm entries for you.
-          </CardDescription>
-          <CardAction>
-            <Button
-              type="button"
-              onClick={() => void analyseFigures()}
-              disabled={analysis.loading || workspaceBusy}
-            >
-              {analysis.loading || workspaceBusy
-                ? "Analysing…"
-                : analysis.error
-                  ? "Retry analysis"
-                  : "Analyse figures"}
-            </Button>
-          </CardAction>
-        </CardHeader>
-        {analysis.error ? (
-          <CardContent>
-            <Alert variant="destructive">
-              <AlertTitle>Analysis could not complete</AlertTitle>
-              <AlertDescription>
-                {analysis.error} Your entries are kept.
-              </AlertDescription>
-            </Alert>
-          </CardContent>
-        ) : null}
-      </Card>
+      <PageHeader
+        title="Analysis"
+        description={
+          <span role="status" aria-live="polite" aria-busy={busy}>
+            {busy
+              ? "Calculating from the submitted figures…"
+              : analysisOutdated
+                ? "Entries changed. Previous results are hidden; review and analyse again."
+                : savedClean &&
+                    activeWorkspace &&
+                    activeWorkspace.analysis === null &&
+                    activeWorkspace.runs.some((run) => run.superseded)
+                  ? `Saved revision ${activeWorkspace.revision} supersedes earlier analysis runs. Review and analyse again to refresh results.`
+                  : displayedAnalysis
+                    ? "Analysis complete. Unconfirmed or missing inputs show as gaps."
+                    : "No analysis yet. Analysis does not confirm entries for you."}
+          </span>
+        }
+        actions={
+          <Button type="button" onClick={() => void analyseFigures()} disabled={busy}>
+            {busy ? <Spinner /> : null}
+            {busy ? "Analysing…" : analysis.error ? "Retry analysis" : "Analyse figures"}
+          </Button>
+        }
+      />
+      {analysis.error ? (
+        <Alert variant="destructive">
+          <AlertTitle>Analysis could not complete</AlertTitle>
+          <AlertDescription>{analysis.error} Your entries are kept.</AlertDescription>
+        </Alert>
+      ) : null}
       {displayedAnalysis ? (
         <AnalysisResults
           data={displayedAnalysis}

@@ -56,7 +56,7 @@ function WorkspaceDialogs() {
               Delete &ldquo;{activeWorkspace?.form.businessName}&rdquo; and all active data?
             </AlertDialogTitle>
             <AlertDialogDescription>
-              This immediately removes saved figures, revision history, uploaded PDFs, extraction snapshots, retrieval chunks/embeddings, analysis runs, preparation reports, and in-session Q&amp;A answers.
+              This immediately removes saved figures, revision history, uploaded PDFs, extraction snapshots, retrieval chunks and embeddings, analysis runs, reports and assistant answers.
             </AlertDialogDescription>
             <AlertDialogDescription className="text-xs">
               Backup limitation: external PostgreSQL host backups or point-in-time recovery snapshots follow database-host retention policies and are not immediately purged.
@@ -69,7 +69,7 @@ function WorkspaceDialogs() {
               disabled={workspaceBusy}
               onClick={() => void handleDeleteWorkspace()}
             >
-              Delete workspace permanently
+              Delete business permanently
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

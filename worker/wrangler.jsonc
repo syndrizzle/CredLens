@@ -1,0 +1,10 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "credlens-ai",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-18",
+  "ai": { "binding": "AI" },
+  "vars": { "MODEL": "@cf/google/gemma-4-26b-a4b-it" },
+  // Prompts carry workspace findings; keep request logging off.
+  "observability": { "enabled": false }
+}

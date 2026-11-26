@@ -1,5 +1,6 @@
 import { HugeiconsIcon } from "@hugeicons/react";
-import { Add01Icon, Building03Icon, Delete02Icon, UnfoldMoreIcon } from "@hugeicons/core-free-icons";
+import { Add01Icon, Delete02Icon, UnfoldMoreIcon } from "@hugeicons/core-free-icons";
+import { Logo } from "@/components/logo";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -11,21 +12,49 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "@/components/ui/sidebar";
+import { SidebarMenu, SidebarMenuButton, SidebarMenuItem, useSidebar } from "@/components/ui/sidebar";
 import { useWorkspace } from "./use-workspace";
+
+function BusinessMark() {
+  return (
+    <span className="flex aspect-square size-8 items-center justify-center rounded-lg bg-sidebar-primary text-sidebar-primary-foreground">
+      <Logo className="size-5" />
+    </span>
+  );
+}
 
 function WorkspaceSwitcher() {
   const {
     session,
+    guest,
+    form,
     businesses,
     activeWorkspace,
+    savedClean,
     actionsDisabled,
     documentBusy,
     requestReplacement,
     setConfirmDeleteWorkspace,
     setReplacement,
   } = useWorkspace();
-  if (!session) return null;
+  const { isMobile } = useSidebar();
+  const name = form.businessName.trim() || "Untitled business";
+
+  if (!session) {
+    return (
+      <SidebarMenu>
+        <SidebarMenuItem>
+          <SidebarMenuButton size="lg" render={<div />} className="hover:bg-transparent active:bg-transparent">
+            <BusinessMark />
+            <span className="grid min-w-0 flex-1 text-left leading-tight">
+              <span className="truncate font-medium">{guest ? name : "CredLens"}</span>
+              <span className="truncate text-xs text-muted-foreground">{guest ? "Demo, not saved" : ""}</span>
+            </span>
+          </SidebarMenuButton>
+        </SidebarMenuItem>
+      </SidebarMenu>
+    );
+  }
 
   return (
     <SidebarMenu>
@@ -36,20 +65,18 @@ function WorkspaceSwitcher() {
             disabled={actionsDisabled}
             render={<SidebarMenuButton size="lg" className="data-popup-open:bg-sidebar-accent" />}
           >
-            <HugeiconsIcon icon={Building03Icon} />
+            <BusinessMark />
             <span className="grid min-w-0 flex-1 text-left leading-tight">
-              <span className="truncate font-medium">
-                {activeWorkspace?.form.businessName || "No workspace open"}
-              </span>
+              <span className="truncate font-medium">{name}</span>
               <span className="truncate text-xs text-muted-foreground">
-                {activeWorkspace ? `Revision ${activeWorkspace.revision}` : `${businesses.length} saved`}
+                {!activeWorkspace ? "Not saved yet" : savedClean ? `Saved, revision ${activeWorkspace.revision}` : "Unsaved changes"}
               </span>
             </span>
             <HugeiconsIcon icon={UnfoldMoreIcon} className="ml-auto" />
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="w-72">
+          <DropdownMenuContent align="start" side={isMobile ? "bottom" : "right"} className="w-72">
             <DropdownMenuGroup>
-              <DropdownMenuLabel>Saved businesses</DropdownMenuLabel>
+              <DropdownMenuLabel>Businesses</DropdownMenuLabel>
               {businesses.length === 0 ? (
                 <DropdownMenuItem disabled>No saved businesses yet</DropdownMenuItem>
               ) : (
@@ -69,7 +96,7 @@ function WorkspaceSwitcher() {
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={() => requestReplacement({ type: "new" })}>
               <HugeiconsIcon icon={Add01Icon} />
-              New workspace
+              New business
             </DropdownMenuItem>
             {activeWorkspace ? (
               <DropdownMenuItem
@@ -81,7 +108,7 @@ function WorkspaceSwitcher() {
                 }}
               >
                 <HugeiconsIcon icon={Delete02Icon} />
-                Delete workspace
+                Delete business
               </DropdownMenuItem>
             ) : null}
           </DropdownMenuContent>

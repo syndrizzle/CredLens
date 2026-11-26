@@ -86,7 +86,7 @@ class DocumentCitation(Model):
 class QAResponse(Model):
     question: str
     answer: str
-    mode: Literal["ollama", "fallback", "deterministic"]
+    mode: Literal["model", "fallback", "deterministic"]
     model: str | None = None
     fallback_reason: str | None = None
     retrieval_status: Literal["ok", "no_documents", "unavailable"]

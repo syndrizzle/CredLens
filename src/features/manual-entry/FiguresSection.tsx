@@ -15,7 +15,15 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyTitle,
+} from "@/components/ui/empty";
+import { Link } from "@tanstack/react-router";
 import {
   Card,
   CardAction,
@@ -26,6 +34,8 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field";
+import { PageHeader } from "@/components/page-header";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -54,6 +64,8 @@ import { useWorkspace } from "@/features/workspace/use-workspace";
 function FiguresSection() {
   const {
     form,
+    session,
+    activeWorkspace,
     showErrors,
     confirmExample,
     setConfirmExample,
@@ -88,6 +100,21 @@ function FiguresSection() {
 
   return (
     <>
+      <PageHeader
+        title="Figures"
+        description={
+          counts.present === 0
+            ? "Enter up to three completed financial years."
+            : `${counts.reviewed} of ${counts.present} figures confirmed`
+        }
+        actions={
+          counts.present > 0 ? (
+            <Button type="button" variant="outline" onClick={loadExample}>
+              Load fictional example
+            </Button>
+          ) : null
+        }
+      />
       {showErrors && hasErrors(errors) ? (
         <Alert variant="destructive">
           <HugeiconsIcon icon={Alert02Icon} />
@@ -99,27 +126,37 @@ function FiguresSection() {
         </Alert>
       ) : null}
 
+      {counts.present === 0 ? (
+        <Empty className="border border-dashed border-border">
+          <EmptyHeader>
+            <EmptyTitle>Add your figures</EmptyTitle>
+            <EmptyDescription>
+              Upload a statement PDF to fill them in for review, try the
+              fictional example, or type them into the table below.
+            </EmptyDescription>
+          </EmptyHeader>
+          <EmptyContent className="flex-row flex-wrap justify-center">
+            {session && activeWorkspace ? (
+              <Link to="/documents" className={buttonVariants()}>
+                Upload a PDF
+              </Link>
+            ) : null}
+            <Button
+              type="button"
+              variant={session && activeWorkspace ? "outline" : "default"}
+              onClick={loadExample}
+            >
+              Load fictional example
+            </Button>
+          </EmptyContent>
+        </Empty>
+      ) : null}
+
       <form onSubmit={handleSubmit} className="flex flex-col gap-6">
-        <Card>
-          <CardHeader>
-            <CardTitle>Business</CardTitle>
-            <CardDescription>
-              INR · Standalone basis · April–March financial years
-            </CardDescription>
-            <CardAction>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={loadExample}
-              >
-                Load fictional example
-              </Button>
-            </CardAction>
-          </CardHeader>
+        <Card size="sm">
           <CardContent>
-            <div className="max-w-md space-y-2">
-              <Label htmlFor="business-name">Business name</Label>
+            <Field className="max-w-md">
+              <FieldLabel htmlFor="business-name">Business name</FieldLabel>
               <Input
                 id="business-name"
                 value={form.businessName}
@@ -127,28 +164,16 @@ function FiguresSection() {
                 maxLength={120}
                 autoComplete="organization"
                 aria-invalid={errors.businessName ? true : undefined}
-                aria-describedby={
-                  errors.businessName
-                    ? "business-name-error"
-                    : "business-name-hint"
-                }
+                aria-describedby={errors.businessName ? "business-name-error" : "business-name-hint"}
               />
               {errors.businessName ? (
-                <p
-                  id="business-name-error"
-                  className="text-sm text-destructive"
-                >
-                  {errors.businessName}
-                </p>
+                <FieldError id="business-name-error">{errors.businessName}</FieldError>
               ) : (
-                <p
-                  id="business-name-hint"
-                  className="text-xs text-muted-foreground"
-                >
-                  Context only; not used in any calculation.
-                </p>
+                <FieldDescription id="business-name-hint">
+                  Amounts in INR from standalone statements, April to March years. The name is not used in any calculation.
+                </FieldDescription>
               )}
-            </div>
+            </Field>
           </CardContent>
         </Card>
 
@@ -327,7 +352,7 @@ function FiguresSection() {
             <AlertDialogAction
               variant="destructive"
               disabled={actionsDisabled}
-              onClick={applyExample}
+              onClick={() => applyExample()}
             >
               Replace entries
             </AlertDialogAction>

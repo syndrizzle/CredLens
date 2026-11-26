@@ -345,7 +345,7 @@ def test_live_workspace_deletion_audit_and_backup_limits(monkeypatch):
     import app.documents as document_module
 
     monkeypatch.setenv("DATABASE_URL", os.environ["PERSISTENCE_TEST_URL"])
-    monkeypatch.setenv("OLLAMA_DISABLED", "1")
+    monkeypatch.setenv("CREDLENS_AI_DISABLED", "1")
     storage_dir = (
         Path(__file__).resolve().parents[1] / ".storage" / f"test_p502_{uuid4().hex[:8]}"
     )

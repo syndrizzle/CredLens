@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { AnalysisOverview } from "../src/features/analysis/AnalysisOverview";
-import { AnalysisResults } from "../src/features/analysis/AnalysisResults";
+import { AnalysisResults, IndicatorDetails } from "../src/features/analysis/AnalysisResults";
 import { SourceReview } from "../src/features/documents/SourceReview";
 import { WorkspaceQA } from "../src/features/qa/WorkspaceQA";
 import { PreparationReportSheet } from "../src/features/reports/PreparationReport";
@@ -10,6 +10,8 @@ import {
   displayDecimal,
   fetchAnalysis,
   groupIndian,
+  INDICATORS,
+  type Indicator,
   type AnalysisResponse,
 } from "../src/features/analysis/api";
 import {
@@ -46,6 +48,12 @@ function engine(form: FormDraft): AnalysisResponse {
   expect(result.exitCode).toBe(0);
   return JSON.parse(result.stdout.toString());
 }
+// Evidence lives in the per-indicator Sheet, so render every indicator's details.
+function details(data: AnalysisResponse, businessId?: string) {
+  return (Object.keys(INDICATORS) as Indicator[])
+    .map((row) => renderToStaticMarkup(<IndicatorDetails data={data} row={row} businessId={businessId} />))
+    .join("");
+}
 function respond(body: unknown, status = 200) {
   globalThis.fetch = (async () =>
     Response.json(body, { status })) as typeof fetch;
@@ -79,7 +87,7 @@ test("overview cards keep unrelated results when interest is missing and chart o
   const form = reviewed();
   form.periods[1]!.figures.interest_expense = { raw: "", reviewed: false };
   const html = renderToStaticMarkup(
-    <AnalysisOverview data={engine(form)} onOpenFinding={() => {}} onOpenInput={() => {}} />,
+    <AnalysisOverview data={engine(form)} onOpenFinding={() => {}} onOpenInput={() => {}} onOpenAllActions={() => {}} />,
   );
   expect(html).toContain("Not assessed");
   expect(html.match(/>Supported</g)).toHaveLength(5);
@@ -87,7 +95,7 @@ test("overview cards keep unrelated results when interest is missing and chart o
   expect(html.match(/<th scope="row">FY 20/g)).toHaveLength(4);
   form.periods[0]!.figures.revenue = { raw: "1000000", reviewed: false };
   const oneYear = renderToStaticMarkup(
-    <AnalysisOverview data={engine(form)} onOpenFinding={() => {}} onOpenInput={() => {}} />,
+    <AnalysisOverview data={engine(form)} onOpenFinding={() => {}} onOpenInput={() => {}} onOpenAllActions={() => {}} />,
   );
   expect(oneYear).toContain("Trend charts need net profit margin supported in at least two years.");
 });
@@ -120,12 +128,13 @@ test("real Python response passes transport guard and renders all indicators wit
   respond(data);
   const signal = new AbortController().signal;
   const output = await fetchAnalysis(form, signal);
-  const html = renderToStaticMarkup(
-    <AnalysisResults data={output} businessName={form.businessName} />,
-  );
+  const html =
+    renderToStaticMarkup(
+      <AnalysisResults data={output} businessName={form.businessName} />,
+    ) + details(output);
   expect(html).toContain("20.00%");
   expect(html).toContain("3.00x");
-  expect(html).toContain("INR 2500000.00");
+  expect(html).toContain("₹25,00,000.00");
   expect(html).toContain("Manual entry");
   expect(html).toContain("Revision 1");
   expect(html).toContain("financial-rules-v1");
@@ -323,8 +332,9 @@ test("preparation actions render in server order with links to the affected evid
   );
   expect(html).toContain("Preparation actions");
   expect(html).toContain("preparation-actions-v1");
-  expect(html.indexOf("Review current assets")).toBeLessThan(
-    html.indexOf("Supply interest expense"),
+  const actionsHtml = html.slice(html.indexOf("Preparation actions"));
+  expect(actionsHtml.indexOf("Review current assets")).toBeLessThan(
+    actionsHtml.indexOf("Supply interest expense"),
   );
   expect(html).toContain("not a credit-risk ranking");
   expect(html).toContain(
@@ -358,7 +368,7 @@ test("legacy analysis remains readable and asks for re-analysis; malformed actio
     <AnalysisResults data={result} businessName={form.businessName} />,
   );
   expect(html).toContain("predates the preparation action list");
-  expect(html).toContain("Analyse the saved workspace again");
+  expect(html).toContain("predates the preparation action list. Analyse");
   expect(html).toContain("20.00%");
   for (const malformed of [
     { ...data, actions: [] },
@@ -481,7 +491,7 @@ test("updateWorkspace sends expected_revision, handles 409 conflicts, validates 
         },
       ]}
     />,
-  );
+  ) + details(analysis);
   expect(html).toContain("Input revision 2 (current)");
   expect(html).toContain(
     "Supersedes 1 earlier analysis run (Rev 1 marked superseded).",
@@ -835,7 +845,7 @@ test("extraction client validates snapshots, runs extraction, and renders Source
       businessId={bizId}
       inputRevision={3}
     />,
-  );
+  ) + details(output, bizId);
   expect(resultsHtml).toContain("Document-supported and manual figures");
   expect(resultsHtml).toContain("Document: aster-reference.pdf · p. 1");
   expect(resultsHtml).toContain(
@@ -950,9 +960,22 @@ test("Q&A client validates responses, enforces status errors, and WorkspaceQA re
       hasUnsavedChanges={true}
     />,
   );
-  expect(qaHtml).toContain("Evidence-grounded Q&amp;A");
+  expect(qaHtml).toContain("Ask about Aster Components (fictional)");
   expect(qaHtml).toContain("Unsaved edits present");
   expect(qaHtml).toContain("borrowing notes");
+
+  // Streamed answers carry everything but the text in a data-qa part.
+  const { validQAMetadata, qaErrorMessage, qaStreamUrl } = await import("../src/features/analysis/api");
+  const { answer: _answer, ...metadata } = validPayload;
+  expect(validQAMetadata(metadata)).toBe(true);
+  expect(validQAMetadata(validPayload)).toBe(false);
+  expect(validQAMetadata({ ...metadata, mode: "ollama" })).toBe(false);
+  expect(qaStreamUrl("a b")).toBe("/api/businesses/a%20b/qa/stream");
+  const withStatus = (statusCode: number) => Object.assign(new Error("{}"), { statusCode });
+  expect(qaErrorMessage(withStatus(401))).toContain("session expired");
+  expect(qaErrorMessage(withStatus(404))).toContain("not found");
+  expect(qaErrorMessage(withStatus(422))).toContain("between 1 and 500");
+  expect(qaErrorMessage(new TypeError("Failed to fetch"))).toContain("unavailable");
 });
 
 test("report client validates preparation reports and renders Current vs Superseded printable sheets", async () => {

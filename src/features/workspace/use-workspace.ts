@@ -29,10 +29,12 @@ import { useAnalysis } from "@/features/analysis/use-analysis";
 import type { HighlightedCell } from "@/features/documents/SourceReview";
 import { createContext, useContext, useEffect, useRef, useState, type FormEvent } from "react";
 import { useNavigate } from "@tanstack/react-router";
+import { toast } from "sonner";
 import { SECTIONS, type Section } from "@/app/sections";
 import {
   FINANCIAL_FIELDS,
   applyCandidatesToForm,
+  confirmPresent,
   countReview,
   createEmptyForm,
   createExampleForm,
@@ -53,11 +55,11 @@ import {
   type FinancialFieldKey,
   type FormDraft,
   type FormErrors,
-  type PeriodDraft,
   type Unit,
 } from "@/features/manual-entry/model";
 
 const EMPTY_ERRORS: FormErrors = { years: {}, figures: {} };
+type AuthMode = "login" | "register";
 type Replacement = { type: "load"; id: string } | { type: "new" } | { type: "signout" };
 
 function useWorkspaceController(section?: Section) {
@@ -66,9 +68,12 @@ function useWorkspaceController(section?: Section) {
   const [form, setForm] = useState<FormDraft>(createEmptyForm);
   const [showErrors, setShowErrors] = useState(false);
   const [confirmExample, setConfirmExample] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
+  // Action feedback is transient, so it goes to a toast instead of page content.
+  const setNotice = (message: string | null) => {
+    if (message) toast(message);
+  };
   const [session, setSession] = useState<SessionUser | null>(null);
-  const [authMode, setAuthMode] = useState<"login" | "register">("login");
+  const [guest, setGuest] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [authError, setAuthError] = useState<string | null>(null);
@@ -95,7 +100,6 @@ function useWorkspaceController(section?: Section) {
   const [auditEvents, setAuditEvents] = useState<AuditEventSummary[]>([]);
   const [documentBusy, setDocumentBusy] = useState(false);
   const [documentError, setDocumentError] = useState<string | null>(null);
-  const [selectedPdf, setSelectedPdf] = useState<File | null>(null);
   const [activeReview, setActiveReview] = useState<DocumentExtractionResponse | null>(null);
   const [reviewPage, setReviewPage] = useState(1);
   const [highlightedCell, setHighlightedCell] = useState<HighlightedCell | null>(null);
@@ -103,6 +107,7 @@ function useWorkspaceController(section?: Section) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [replacement, setReplacement] = useState<Replacement | null>(null);
   const actionPending = useRef(true);
+  const pendingDemoRun = useRef(false);
   const actionsDisabled = checkingSession || authBusy || workspaceBusy || documentBusy;
 
   const analysis = useAnalysis(form);
@@ -112,34 +117,16 @@ function useWorkspaceController(section?: Section) {
   const allPresentReviewed =
     counts.present > 0 && counts.reviewed === counts.present;
   const savedClean = activeWorkspace !== null && activeWorkspace.form === form;
+  const analysisOutdated =
+    analysis.stale ||
+    (activeWorkspace !== null && activeWorkspace.form !== form && activeWorkspace.analysis !== null);
   const displayedAnalysis =
     savedClean && activeWorkspace.analysis && !analysis.data
       ? activeWorkspace.analysis
       : analysis.data;
 
-  useEffect(() => {
-    let active = true;
-    fetchSession()
-      .then((user) => {
-        if (!active || !user) return;
-        setSession(user);
-        return fetchBusinesses().then((items) => {
-          if (active) setBusinesses(items);
-        });
-      })
-      .catch(() => {})
-      .finally(() => {
-        if (active) {
-          actionPending.current = false;
-          setCheckingSession(false);
-        }
-      });
-    return () => {
-      active = false;
-    };
-  }, []);
 
-  function applyWorkspace(workspace: WorkspaceResponse, message: string) {
+  function applyWorkspace(workspace: WorkspaceResponse, message: string | null) {
     setReplacement(null);
     const nextForm = formFromRequest(workspace.request);
     setForm(nextForm);
@@ -178,6 +165,31 @@ function useWorkspaceController(section?: Section) {
     setNotice(message);
   }
 
+  useEffect(() => {
+    let active = true;
+    fetchSession()
+      .then((user) => {
+        if (!active || !user) return;
+        setSession(user);
+        return fetchBusinesses().then(async (items) => {
+          if (!active) return;
+          setBusinesses(items);
+          const latest = items[0] && (await fetchWorkspace(items[0].id).catch(() => null));
+          if (active && latest) applyWorkspace(latest, null);
+        });
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (active) {
+          actionPending.current = false;
+          setCheckingSession(false);
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
   function revealPending() {
     const target = pendingReveal.current;
     const element = target && document.getElementById(target.id);
@@ -187,6 +199,13 @@ function useWorkspaceController(section?: Section) {
     element.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: target.block });
     element.focus({ preventScroll: true });
   }
+  // `analysis.run` reads the committed form, so the demo run waits for the example to render.
+  useEffect(() => {
+    if (!pendingDemoRun.current) return;
+    pendingDemoRun.current = false;
+    analysis.run();
+  });
+
   // Targets in a hidden section become visible only after navigation re-renders.
   useEffect(revealPending);
 
@@ -200,7 +219,7 @@ function useWorkspaceController(section?: Section) {
     }
   }
 
-  async function handleAuth(event: FormEvent<HTMLFormElement>) {
+  async function handleAuth(event: FormEvent<HTMLFormElement>, authMode: AuthMode) {
     event.preventDefault();
     if (actionPending.current) return;
     actionPending.current = true;
@@ -211,8 +230,17 @@ function useWorkspaceController(section?: Section) {
       const items = await fetchBusinesses();
       setSession(user);
       setBusinesses(items);
+      setGuest(false);
       setPassword("");
       setNotice(`Signed in as ${user.email}.`);
+      // Open the newest business unless a guest draft is waiting to be saved.
+      if (items[0] && !hasEntries(form)) {
+        try {
+          applyWorkspace(await fetchWorkspace(items[0].id), null);
+        } catch (error) {
+          setWorkspaceError(error instanceof Error ? error.message : "Could not load workspace.");
+        }
+      }
     } catch (error) {
       setAuthError(
         error instanceof Error ? error.message : "Authentication failed.",
@@ -221,6 +249,22 @@ function useWorkspaceController(section?: Section) {
       actionPending.current = false;
       setAuthBusy(false);
     }
+  }
+
+  // Guests explore the fictional company in the browser only (D-10); no server data, no model calls.
+  // The demo opens on finished results: fictional figures arrive confirmed and analysed.
+  function startGuest() {
+    setGuest(true);
+    setAuthError(null);
+    applyExample(true);
+    void navigate({ to: "/" });
+  }
+
+  // Creating an account keeps the guest's draft so it can be saved; leaving the demo clears it.
+  function leaveGuest(to: "/login" | "/signup") {
+    setGuest(false);
+    if (to === "/login") startNewWorkspace(true);
+    void navigate({ to });
   }
 
   async function handleSignOut() {
@@ -244,12 +288,11 @@ function useWorkspaceController(section?: Section) {
       setApplyWarnings([]);
       setWorkspaceError(null);
       setDocumentError(null);
-      setSelectedPdf(null);
       if (fileInputRef.current) fileInputRef.current.value = "";
       setAuthError(null);
       setForm(createEmptyForm());
       setReplacement(null);
-      setNotice("Signed out. Workspace entries cleared from this browser.");
+      setNotice("Signed out. Entries were cleared from this browser.");
     } catch {
       setWorkspaceError("Sign out could not be confirmed. Your session may still be active. Your entries are kept; please retry.");
     } finally {
@@ -275,12 +318,11 @@ function useWorkspaceController(section?: Section) {
       setHighlightedCell(null);
       setApplyWarnings([]);
       setConfirmDeleteWorkspace(false);
-      setSelectedPdf(null);
       if (fileInputRef.current) fileInputRef.current.value = "";
       setForm(createEmptyForm());
       setReplacement(null);
       setNotice(
-        `Deleted workspace "${targetName}" (${deleted.documents_removed} PDFs, ${deleted.runs_removed} analysis runs/reports, ${deleted.revisions_removed} revisions removed). ${deleted.backup_notice}`,
+        `Deleted "${targetName}" (${deleted.documents_removed} PDFs, ${deleted.runs_removed} analysis runs/reports, ${deleted.revisions_removed} revisions removed). ${deleted.backup_notice}`,
       );
       if (auditOpen) {
         try {
@@ -299,11 +341,7 @@ function useWorkspaceController(section?: Section) {
     }
   }
 
-  async function handleToggleAuditLog() {
-    if (auditOpen) {
-      setAuditOpen(false);
-      return;
-    }
+  async function loadAuditLog() {
     setAuditOpen(true);
     setAuditLoading(true);
     setAuditError(null);
@@ -328,7 +366,7 @@ function useWorkspaceController(section?: Section) {
       const workspace = await fetchWorkspace(businessId);
       applyWorkspace(
         workspace,
-        `Loaded saved workspace "${workspace.request.business_name}".`,
+        `Opened "${workspace.request.business_name}".`,
       );
     } catch (error) {
       setWorkspaceError(
@@ -359,7 +397,7 @@ function useWorkspaceController(section?: Section) {
         : await saveWorkspace(form);
       applyWorkspace(
         workspace,
-        `Saved workspace "${workspace.request.business_name}".`,
+        `Saved "${workspace.request.business_name}".`,
       );
     } catch (error) {
       setWorkspaceError(
@@ -392,8 +430,8 @@ function useWorkspaceController(section?: Section) {
     }
   }
 
-  async function handleUploadDocument() {
-    if (actionPending.current || !activeWorkspace || !selectedPdf) return;
+  async function handleUploadDocument(selectedPdf: File) {
+    if (actionPending.current || !activeWorkspace) return;
     actionPending.current = true;
     setDocumentBusy(true);
     setDocumentError(null);
@@ -410,11 +448,10 @@ function useWorkspaceController(section?: Section) {
             }
           : current,
       );
-      setSelectedPdf(null);
       if (fileInputRef.current) fileInputRef.current.value = "";
       setNotice(uploaded.status === "ready"
         ? `Uploaded and processed "${uploaded.filename}".`
-        : `Saved "${uploaded.filename}" with status: ${uploaded.status}. Check its message below.`);
+        : `Saved "${uploaded.filename}" with status: ${uploaded.status}. Check its message in the list.`);
     } catch (error) {
       setDocumentError(
         error instanceof Error ? error.message : "Could not upload PDF.",
@@ -600,7 +637,7 @@ function useWorkspaceController(section?: Section) {
       setHighlightedCell((current) =>
         activeReview?.id === documentId ? null : current,
       );
-      setNotice(`Removed "${filename}" from workspace.`);
+      setNotice(`Removed "${filename}".`);
     } catch (error) {
       setDocumentError(
         error instanceof Error ? error.message : "Could not remove document.",
@@ -611,7 +648,7 @@ function useWorkspaceController(section?: Section) {
     }
   }
 
-  function startNewWorkspace() {
+  function startNewWorkspace(silent = false) {
     setReplacement(null);
     setForm(createEmptyForm());
     setActiveWorkspace(null);
@@ -620,13 +657,12 @@ function useWorkspaceController(section?: Section) {
     setConfirmDeleteWorkspace(false);
     setHighlightedCell(null);
     setApplyWarnings([]);
-    setSelectedPdf(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
     setShowErrors(false);
     setConfirmExample(false);
     setWorkspaceError(null);
     setDocumentError(null);
-    setNotice("Started a new unsaved workspace draft.");
+    if (!silent) setNotice("Started a new business.");
   }
 
   function requestReplacement(action: Replacement) {
@@ -791,9 +827,11 @@ function useWorkspaceController(section?: Section) {
     applyExample();
   }
 
-  function applyExample() {
+  function applyExample(demo = false) {
     setReplacement(null);
-    setForm(createExampleForm());
+    const example = createExampleForm();
+    setForm(demo ? { ...example, periods: confirmPresent(example.periods) } : example);
+    if (demo) pendingDemoRun.current = true;
     setActiveWorkspace(null);
     setActiveReview(null);
     setActiveReport(null);
@@ -802,9 +840,7 @@ function useWorkspaceController(section?: Section) {
     setApplyWarnings([]);
     setShowErrors(false);
     setConfirmExample(false);
-    setNotice(
-      "Loaded the fictional example. Figures are unreviewed; check them before confirming.",
-    );
+    if (!demo) setNotice("Loaded the fictional example. Figures are unreviewed; check them before confirming.");
   }
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -825,21 +861,7 @@ function useWorkspaceController(section?: Section) {
     }
 
     setShowErrors(false);
-    setForm((current) => ({
-      ...current,
-      periods: current.periods.map((period) => ({
-        ...period,
-        figures: Object.fromEntries(
-          FINANCIAL_FIELDS.map((field) => {
-            const figure = period.figures[field.key];
-            return [
-              field.key,
-              { ...figure, reviewed: figure.raw.trim() !== "" },
-            ];
-          }),
-        ) as PeriodDraft["figures"],
-      })),
-    }));
+    setForm((current) => ({ ...current, periods: confirmPresent(current.periods) }));
     setNotice(
       `Confirmed ${counts.present} present ${
         counts.present === 1 ? "figure" : "figures"
@@ -900,14 +922,14 @@ function useWorkspaceController(section?: Section) {
             : await saveWorkspace(form);
           applyWorkspace(
             saved,
-            `Saved workspace "${saved.request.business_name}".`,
+            `Saved "${saved.request.business_name}".`,
           );
           targetId = saved.business_id;
         }
         const workspace = await analyseWorkspace(targetId);
         applyWorkspace(
           workspace,
-          `Saved and analysed workspace "${workspace.request.business_name}".`,
+          `Saved and analysed "${workspace.request.business_name}".`,
         );
       } catch (error) {
         setWorkspaceError(
@@ -931,12 +953,12 @@ function useWorkspaceController(section?: Section) {
     setShowErrors,
     confirmExample,
     setConfirmExample,
-    notice,
     setNotice,
     session,
     setSession,
-    authMode,
-    setAuthMode,
+    guest,
+    startGuest,
+    leaveGuest,
     email,
     setEmail,
     password,
@@ -972,8 +994,6 @@ function useWorkspaceController(section?: Section) {
     setDocumentBusy,
     documentError,
     setDocumentError,
-    selectedPdf,
-    setSelectedPdf,
     activeReview,
     setActiveReview,
     reviewPage,
@@ -994,13 +1014,14 @@ function useWorkspaceController(section?: Section) {
     allPresentReviewed,
     savedClean,
     displayedAnalysis,
+    analysisOutdated,
     applyWorkspace,
     revealPending,
     reveal,
     handleAuth,
     handleSignOut,
     handleDeleteWorkspace,
-    handleToggleAuditLog,
+    loadAuditLog,
     handleSelectWorkspace,
     handleSaveWorkspace,
     handleRefreshDocuments,
@@ -1038,4 +1059,4 @@ function useWorkspace() {
   return workspace;
 }
 
-export { WorkspaceContext, useWorkspace, useWorkspaceController, type Replacement };
+export { WorkspaceContext, useWorkspace, useWorkspaceController, type AuthMode, type Replacement };

@@ -1,13 +1,12 @@
-import { WorkspaceQA } from "@/features/qa/WorkspaceQA";
-import { PreparationReportPanel } from "@/features/reports/PreparationReport";
+import { lazy, Suspense, useState } from "react";
+import { Navigate } from "@tanstack/react-router";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { Link } from "@tanstack/react-router";
+import { Alert02Icon, Tick02Icon } from "@hugeicons/core-free-icons";
 import { AppShell } from "@/app/AppShell";
-import { type Section } from "@/app/sections";
-import { Alert02Icon } from "@hugeicons/core-free-icons";
+import { SECTIONS, type Section } from "@/app/sections";
+import { PageHeader } from "@/components/page-header";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { Button } from "@/components/ui/button";
 import {
   Empty,
   EmptyContent,
@@ -15,21 +14,50 @@ import {
   EmptyHeader,
   EmptyTitle,
 } from "@/components/ui/empty";
-import { sortedPeriods } from "@/features/manual-entry/model";
-import { WorkspaceContext, useWorkspaceController } from "./use-workspace";
-import { OverviewSection } from "./OverviewSection";
-import { AccountMenu } from "./AccountMenu";
-import { WorkspaceDialogs } from "./WorkspaceDialogs";
-import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
+import { Spinner } from "@/components/ui/spinner";
+import { AuthPage } from "@/features/auth/AuthPage";
+import { AnalysisSection } from "@/features/analysis/AnalysisSection";
 import { DocumentsSection } from "@/features/documents/DocumentsSection";
 import { FiguresSection } from "@/features/manual-entry/FiguresSection";
-import { AnalysisSection } from "@/features/analysis/AnalysisSection";
+import { sortedPeriods } from "@/features/manual-entry/model";
+import { PreparationReportPanel } from "@/features/reports/PreparationReport";
+import { SettingsSection } from "@/features/settings/SettingsSection";
+import { AccountMenu } from "./AccountMenu";
+import { OverviewSection } from "./OverviewSection";
+import {
+  WorkspaceContext,
+  useWorkspaceController,
+  type AuthMode,
+} from "./use-workspace";
+import { WorkspaceDialogs } from "./WorkspaceDialogs";
+import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
 
-function Workspace({ section }: { section?: Section }) {
+// The AI SDK and chat components load only once the Assistant is first opened.
+const WorkspaceQA = lazy(() => import("@/features/qa/WorkspaceQA").then((module) => ({ default: module.WorkspaceQA })));
+
+// What each account-only page offers, for the guest and unsaved-business prompts.
+const ACCOUNT_PURPOSE: Partial<Record<Section, string>> = {
+  documents: "upload statement PDFs",
+  reports: "create reports for your accountant or lender",
+  assistant: "ask questions about your figures and documents",
+  settings: "manage your account",
+};
+
+function Workspace({
+  section,
+  authMode,
+}: {
+  section?: Section;
+  authMode?: AuthMode;
+}) {
   const workspace = useWorkspaceController(section);
+  const [assistantSeen, setAssistantSeen] = useState(false);
+  if (!assistantSeen && (!section || section === "assistant")) setAssistantSeen(true);
   const {
-    notice,
     session,
+    guest,
+    checkingSession,
+    form,
     activeWorkspace,
     workspaceBusy,
     workspaceError,
@@ -40,117 +68,208 @@ function Workspace({ section }: { section?: Section }) {
     analysis,
     savedClean,
     handleSaveWorkspace,
+    leaveGuest,
+    counts,
+    analysisOutdated,
   } = workspace;
 
+  if (checkingSession) {
+    return (
+      <div className="flex min-h-svh items-center justify-center">
+        <Spinner
+          className="size-6 text-muted-foreground"
+          aria-label="Checking your session"
+        />
+      </div>
+    );
+  }
+
+  if (!session && !guest) {
+    return (
+      <WorkspaceContext.Provider value={workspace}>
+        <AuthPage mode={authMode ?? "login"} />
+        {section ? <Navigate to="/login" replace /> : null}
+      </WorkspaceContext.Provider>
+    );
+  }
+  if (authMode) return <Navigate to="/" replace />;
+
   const show = (id: Section) => !section || section === id;
-  const needsWorkspace =
-    !activeWorkspace && (section === "documents" || section === "report" || section === "qa");
+  const locked = (id: Section) =>
+    !session
+      ? Boolean(SECTIONS.find((item) => item.id === id)?.account)
+      : id !== "settings" && Boolean(ACCOUNT_PURPOSE[id]) && !activeWorkspace;
+  const lockedSection = section && locked(section) ? section : null;
 
   return (
     <WorkspaceContext.Provider value={workspace}>
       <AppShell
         section={section}
+        businessName={form.businessName.trim() || "Untitled business"}
         switcher={<WorkspaceSwitcher />}
         account={<AccountMenu />}
+        badges={{
+          documents: activeWorkspace?.documents.length || undefined,
+          figures:
+            counts.present > 0 ? (
+              <>
+                {counts.reviewed}/{counts.present}
+                <span className="sr-only"> confirmed</span>
+              </>
+            ) : undefined,
+          analysis: analysisOutdated ? "Outdated" : undefined,
+        }}
         actions={
-          session ? (
+          !session ? (
             <Button
               type="button"
-              variant="outline"
+              size="sm"
+              onClick={() => leaveGuest("/signup")}
+            >
+              Create account
+            </Button>
+          ) : savedClean ? (
+            <span className="flex items-center gap-1.5 text-sm text-muted-foreground">
+              <HugeiconsIcon icon={Tick02Icon} className="size-4" />
+              Saved
+            </span>
+          ) : (
+            <Button
+              type="button"
               size="sm"
               onClick={handleSaveWorkspace}
-              disabled={actionsDisabled || savedClean}
+              disabled={actionsDisabled}
             >
-              {workspaceBusy
-                ? "Saving…"
-                : savedClean && activeWorkspace
-                  ? `Saved · Rev ${activeWorkspace.revision}`
-                  : "Save workspace"}
+              {workspaceBusy ? <Spinner /> : null}
+              {workspaceBusy ? "Saving…" : "Save"}
             </Button>
-          ) : (
-            <Badge variant="outline">Not saved</Badge>
           )
         }
       >
-        <fieldset disabled={actionsDisabled} className="mx-auto flex w-full min-w-0 max-w-5xl flex-col gap-6 print:max-w-none" aria-label="Financial health workspace">
-          <div className={activeReport ? "flex flex-col gap-6 print:hidden" : "flex flex-col gap-6"}>
-          {notice ? (
-            <p
-              role="status"
-              aria-live="polite"
-              className="text-sm font-medium text-foreground"
+        <fieldset
+          disabled={actionsDisabled}
+          className="mx-auto flex w-full max-w-6xl min-w-0 flex-col gap-6 print:max-w-none"
+          aria-label="Business workspace"
+        >
+          <div
+            className={
+              activeReport
+                ? "flex flex-col gap-6 print:hidden"
+                : "flex flex-col gap-6"
+            }
+          >
+            {workspaceError ? (
+              <Alert variant="destructive">
+                <HugeiconsIcon icon={Alert02Icon} />
+                <AlertTitle>Something went wrong</AlertTitle>
+                <AlertDescription className="col-start-2">
+                  {workspaceError}
+                </AlertDescription>
+              </Alert>
+            ) : null}
+
+            {lockedSection ? (
+              <>
+                <PageHeader
+                  title={
+                    SECTIONS.find((item) => item.id === lockedSection)!.title
+                  }
+                />
+                <Empty className="border border-dashed border-border">
+                  <EmptyHeader>
+                    <EmptyTitle>
+                      {session
+                        ? "Save this business first"
+                        : "Create an account to continue"}
+                    </EmptyTitle>
+                    <EmptyDescription>
+                      {session
+                        ? `Once saved, you can ${ACCOUNT_PURPOSE[lockedSection]}.`
+                        : `An account lets you ${ACCOUNT_PURPOSE[lockedSection]}. Your demo figures carry over.`}
+                    </EmptyDescription>
+                  </EmptyHeader>
+                  <EmptyContent>
+                    {session ? (
+                      <Button type="button" onClick={handleSaveWorkspace}>
+                        Save business
+                      </Button>
+                    ) : (
+                      <Button
+                        type="button"
+                        onClick={() => leaveGuest("/signup")}
+                      >
+                        Create account
+                      </Button>
+                    )}
+                  </EmptyContent>
+                </Empty>
+              </>
+            ) : null}
+
+            <div className={show("overview") ? "contents" : "hidden"}>
+              <OverviewSection />
+            </div>
+            <div
+              className={
+                show("documents") && !locked("documents")
+                  ? "contents"
+                  : "hidden"
+              }
             >
-              {notice}
-            </p>
-          ) : null}
-
-          {workspaceError ? (
-            <Alert variant="destructive">
-              <HugeiconsIcon icon={Alert02Icon} />
-              <AlertTitle>Workspace action failed</AlertTitle>
-              <AlertDescription className="col-start-2">
-                {workspaceError}
-              </AlertDescription>
-            </Alert>
-          ) : null}
-
-          {needsWorkspace ? (
-            <Empty className="border border-dashed border-border">
-              <EmptyHeader>
-                <EmptyTitle>No saved workspace</EmptyTitle>
-                <EmptyDescription>
-                  {section === "documents"
-                    ? "Sign in and save a workspace to upload PDF statements."
-                    : section === "report"
-                      ? "Sign in and save a workspace to generate preparation reports."
-                      : "Sign in and save a workspace to ask questions about its evidence."}
-                </EmptyDescription>
-              </EmptyHeader>
-              <EmptyContent>
-                <Link to="/" className={buttonVariants({ variant: "outline" })}>
-                  Go to Overview
-                </Link>
-              </EmptyContent>
-            </Empty>
-          ) : null}
-
-          <div className={show("overview") ? "contents" : "hidden"}>
-            <OverviewSection />
+              <DocumentsSection />
+            </div>
+            <div className={show("figures") ? "contents" : "hidden"}>
+              <FiguresSection />
+            </div>
+            <div className={show("analysis") ? "contents" : "hidden"}>
+              <AnalysisSection />
+            </div>
+            <div className={show("settings") ? "contents" : "hidden"}>
+              <SettingsSection active={section === "settings"} />
+            </div>
           </div>
 
-          <div className={show("documents") ? "contents" : "hidden"}>
-            <DocumentsSection />
-          </div>
-
-          <div className={show("figures") ? "contents" : "hidden"}>
-            <FiguresSection />
-          </div>
-
-          <div className={show("analysis") ? "contents" : "hidden"}>
-            <AnalysisSection />
-          </div>
-          </div>
-
-          <div className={show("report") ? "contents" : activeReport ? "hidden print:contents" : "hidden"}>
-          {activeWorkspace ? (
-            <PreparationReportPanel
-              key={`report-${activeWorkspace.id}`}
-              businessId={activeWorkspace.id}
-              businessName={activeWorkspace.form.businessName}
-              inputRevision={activeWorkspace.revision}
-              runs={activeWorkspace.runs}
-              hasUnsavedChanges={!savedClean}
-              disabled={workspaceBusy || analysis.loading}
-              activeReport={activeReport}
-              documents={activeWorkspace.documents}
-              onActiveReportChange={setActiveReport}
-              onReportGenerated={handleReportGenerated}
-            />
-          ) : null}
+          <div
+            className={
+              show("reports")
+                ? "contents"
+                : activeReport
+                  ? "hidden print:contents"
+                  : "hidden"
+            }
+          >
+            {activeWorkspace ? (
+                <PreparationReportPanel
+                  key={`report-${activeWorkspace.id}`}
+                  businessId={activeWorkspace.id}
+                  inputRevision={activeWorkspace.revision}
+                  runs={activeWorkspace.runs}
+                  hasUnsavedChanges={!savedClean}
+                  disabled={workspaceBusy || analysis.loading}
+                  activeReport={activeReport}
+                  documents={activeWorkspace.documents}
+                  onActiveReportChange={setActiveReport}
+                  onReportGenerated={handleReportGenerated}
+                />
+            ) : null}
           </div>
 
           {activeWorkspace ? (
-            <div className={!show("qa") ? "hidden" : activeReport ? "print:hidden" : undefined}>
+            <div
+              className={
+                !show("assistant")
+                  ? "hidden"
+                  : activeReport
+                    ? "flex flex-col gap-6 print:hidden"
+                    : "flex flex-col gap-6"
+              }
+            >
+              <PageHeader
+                title="Assistant"
+                description="Answers cite your saved figures and document pages."
+              />
+              {assistantSeen ? (
+              <Suspense fallback={<Spinner className="mx-auto size-6 text-muted-foreground" aria-label="Loading assistant" />}>
               <WorkspaceQA
                 key={activeWorkspace.id}
                 businessId={activeWorkspace.id}
@@ -165,19 +284,10 @@ function Workspace({ section }: { section?: Section }) {
                 hasUnsavedChanges={!savedClean}
                 disabled={workspaceBusy || analysis.loading}
               />
+              </Suspense>
+              ) : null}
             </div>
           ) : null}
-
-          <footer className="space-y-1 pb-4 text-xs text-muted-foreground print:hidden">
-            <p>
-              Financial rules are provisional pending finance-reviewer validation.
-            </p>
-            <p>
-              Cash generation is not assessed; no cash-flow statement is entered
-              in this workflow. Borrowings exclude leases and count current
-              maturities once.
-            </p>
-          </footer>
         </fieldset>
         <WorkspaceDialogs />
       </AppShell>

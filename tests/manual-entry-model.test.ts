@@ -24,6 +24,7 @@ import {
   sortedPeriods,
   validateForm,
   type CandidateImport,
+  confirmPresent,
 } from "../src/features/manual-entry/model";
 
 const latest = latestCompletedYearStart();
@@ -188,6 +189,16 @@ describe("validation", () => {
     expect(reset.revenue).toEqual({ raw: "10000000.00", reviewed: false });
     expect(reset.ebit).toEqual({ raw: "1500000.00", reviewed: false });
     expect(period.figures.revenue.reviewed).toBe(true);
+  });
+
+  test("confirms present figures only and keeps blanks missing", () => {
+    const form = createExampleForm();
+    form.periods[0]!.figures.interest_expense = { raw: "", reviewed: false };
+    const confirmed = confirmPresent(form.periods);
+    expect(confirmed[0]!.figures.revenue.reviewed).toBe(true);
+    expect(confirmed[0]!.figures.interest_expense).toEqual({ raw: "", reviewed: false });
+    expect(countReview(confirmed)).toEqual({ present: 23, reviewed: 23 });
+    expect(form.periods[0]!.figures.revenue.reviewed).toBe(false);
   });
 
   test("detects entries before replacing the example", () => {

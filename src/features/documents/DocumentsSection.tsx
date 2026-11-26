@@ -1,14 +1,50 @@
-import { documentFileUrl } from "@/features/analysis/api";
+import { documentFileUrl, type DocumentSummary } from "@/features/analysis/api";
 import { SourceReview } from "./SourceReview";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { Alert02Icon } from "@hugeicons/core-free-icons";
+import {
+  Alert02Icon,
+  MoreHorizontalIcon,
+  Upload04Icon,
+} from "@hugeicons/core-free-icons";
+import { PageHeader } from "@/components/page-header";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
-import { Button, buttonVariants } from "@/components/ui/button";
-import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
+import { Spinner } from "@/components/ui/spinner";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { useWorkspace } from "@/features/workspace/use-workspace";
+
+const uploadedAt = new Intl.DateTimeFormat("en-IN", { dateStyle: "medium" });
+
+function statusBadge(doc: DocumentSummary) {
+  if (doc.status === "ready") return <Badge variant="secondary">Ready</Badge>;
+  if (doc.status === "failed")
+    return <Badge variant="destructive">Failed</Badge>;
+  return <Badge variant="outline">Processing</Badge>;
+}
 
 function DocumentsSection() {
   const {
@@ -18,8 +54,6 @@ function DocumentsSection() {
     documentBusy,
     documentError,
     setDocumentError,
-    selectedPdf,
-    setSelectedPdf,
     activeReview,
     setActiveReview,
     reviewPage,
@@ -38,97 +72,141 @@ function DocumentsSection() {
     handleJumpToField,
     handleDeleteDocument,
   } = useWorkspace();
+  if (!session || !activeWorkspace) return null;
+  const documents = activeWorkspace.documents;
+  const chooseFile = () => fileInputRef.current?.click();
 
   return (
     <>
-      {session && activeWorkspace ? (
-        <Card>
-          <CardHeader>
-            <CardTitle><h2>Source PDF documents</h2></CardTitle>
-            <CardDescription>
-              Digital statements up to 20 MB and 50 pages. Scanned or image-only PDFs are rejected, and one file is processed at a time.
-            </CardDescription>
-            <CardAction>
-              <Button type="button" variant="ghost" size="sm" disabled={actionsDisabled} onClick={() => void handleRefreshDocuments()}>
-                Refresh document status
-              </Button>
-            </CardAction>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="flex flex-wrap items-end gap-3">
-              <div className="min-w-64 flex-1 space-y-1.5">
-                <Label htmlFor="pdf-upload-input">Financial statement PDF</Label>
-                <Input
-                  ref={fileInputRef}
-                  id="pdf-upload-input"
-                  type="file"
-                  accept=".pdf,application/pdf"
-                  disabled={actionsDisabled}
-                  onChange={(event) => {
-                    const nextFile = event.target.files?.[0] ?? null;
-                    setSelectedPdf(nextFile);
-                    setDocumentError(null);
-                  }}
-                />
-              </div>
-              <Button
-                type="button"
-                onClick={() => void handleUploadDocument()}
-                disabled={actionsDisabled || !selectedPdf}
-              >
-                {documentBusy ? "Processing PDF…" : "Upload PDF"}
-              </Button>
-            </div>
-            {documentError ? (
-              <Alert variant="destructive">
-                <HugeiconsIcon icon={Alert02Icon} />
-                <AlertTitle>PDF upload or processing failed</AlertTitle>
-                <AlertDescription className="col-start-2">
-                  {documentError} Refresh document status before retrying an interrupted request.
-                </AlertDescription>
-              </Alert>
-            ) : null}
-            {activeWorkspace.documents.length > 0 ? (
-              <ul className="divide-y divide-border rounded-lg border border-border" aria-label="Uploaded PDF documents">
-                {activeWorkspace.documents.map((doc) => (
-                  <li
-                    key={doc.id}
-                    className="flex flex-wrap items-center justify-between gap-3 p-3 text-sm"
-                  >
-                    <div className="space-y-1">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="font-medium">{doc.filename}</span>
-                        <Badge
-                          variant={
-                            doc.status === "ready"
-                              ? "secondary"
-                              : doc.status === "failed"
-                                ? "destructive"
-                                : "outline"
-                          }
-                        >
-                          {doc.status === "ready"
-                            ? "Ready"
-                            : doc.status === "failed"
-                              ? "Failed"
-                              : "Processing"}
-                        </Badge>
-                      </div>
-                      <p className="text-xs text-muted-foreground">
-                        {Math.max(1, Math.round(doc.byte_size / 1024))} KB
-                        {doc.page_count !== null
-                          ? ` · ${doc.page_count} ${doc.page_count === 1 ? "page" : "pages"}`
-                          : ""}
-                      </p>
+      <PageHeader
+        title="Documents"
+        description="Digital statement PDFs, up to 20 MB and 50 pages each. Scanned PDFs can't be read."
+        actions={
+          <>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={actionsDisabled}
+              onClick={() => void handleRefreshDocuments()}
+            >
+              Refresh document status
+            </Button>
+            <Button
+              type="button"
+              disabled={actionsDisabled}
+              onClick={chooseFile}
+            >
+              {documentBusy ? (
+                <Spinner />
+              ) : (
+                <HugeiconsIcon icon={Upload04Icon} />
+              )}
+              {documentBusy ? "Processing PDF…" : "Upload PDF"}
+            </Button>
+          </>
+        }
+      />
+      <input
+        ref={fileInputRef}
+        id="pdf-upload-input"
+        type="file"
+        accept=".pdf,application/pdf"
+        className="sr-only"
+        tabIndex={-1}
+        aria-label="Financial statement PDF"
+        disabled={actionsDisabled}
+        onChange={(event) => {
+          const file = event.target.files?.[0];
+          // Reset so choosing the same file again after a failure still uploads.
+          event.target.value = "";
+          setDocumentError(null);
+          if (file) void handleUploadDocument(file);
+        }}
+      />
+
+      {documentError ? (
+        <Alert variant="destructive">
+          <HugeiconsIcon icon={Alert02Icon} />
+          <AlertTitle>PDF upload or processing failed</AlertTitle>
+          <AlertDescription className="col-start-2">
+            {documentError} Refresh document status before retrying an
+            interrupted request.
+          </AlertDescription>
+        </Alert>
+      ) : null}
+
+      {documents.length === 0 ? (
+        <Empty className="border border-dashed border-border">
+          <EmptyHeader>
+            <EmptyMedia variant="icon">
+              <HugeiconsIcon icon={Upload04Icon} />
+            </EmptyMedia>
+            <EmptyTitle>No statements yet</EmptyTitle>
+            <EmptyDescription>
+              Upload a balance sheet or profit and loss PDF. CredLens finds the
+              figures and shows you where each one came from.
+            </EmptyDescription>
+          </EmptyHeader>
+          <EmptyContent>
+            <Button
+              type="button"
+              disabled={actionsDisabled}
+              onClick={chooseFile}
+            >
+              Upload PDF
+            </Button>
+          </EmptyContent>
+        </Empty>
+      ) : (
+        <Card className="py-0">
+          <Table aria-label="Uploaded PDF documents">
+            <TableHeader>
+              <TableRow>
+                <TableHead className="pl-4">File</TableHead>
+                <TableHead className="hidden sm:table-cell">Status</TableHead>
+                <TableHead className="hidden text-right sm:table-cell">
+                  Pages
+                </TableHead>
+                <TableHead className="hidden text-right md:table-cell">
+                  Size
+                </TableHead>
+                <TableHead className="hidden md:table-cell">Uploaded</TableHead>
+                <TableHead className="pr-4 text-right">
+                  <span className="sr-only">Actions</span>
+                </TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {documents.map((doc) => {
+                const pendingRemoval = doc.error_code === "deletion_pending";
+                return (
+                  <TableRow key={doc.id}>
+                    <TableCell className="max-w-40 pl-4 whitespace-normal sm:max-w-72">
+                      <p className="truncate font-medium">{doc.filename}</p>
+                      <div className="mt-1 sm:hidden">{statusBadge(doc)}</div>
                       {doc.error_message ? (
                         <p className="text-xs text-destructive">
                           {doc.error_message}
                         </p>
                       ) : null}
-                    </div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      {doc.status === "ready" ? (
-                        <>
+                    </TableCell>
+                    <TableCell className="hidden sm:table-cell">{statusBadge(doc)}</TableCell>
+                    <TableCell className="hidden text-right tabular-nums sm:table-cell">
+                      {doc.page_count !== null
+                        ? `${doc.page_count} ${doc.page_count === 1 ? "page" : "pages"}`
+                        : "–"}
+                    </TableCell>
+                    <TableCell className="hidden text-right tabular-nums md:table-cell">
+                      {Math.max(1, Math.round(doc.byte_size / 1024))} KB
+                    </TableCell>
+                    <TableCell className="hidden text-muted-foreground md:table-cell">
+                      <time dateTime={doc.created_at}>
+                        {uploadedAt.format(new Date(doc.created_at))}
+                      </time>
+                    </TableCell>
+                    <TableCell className="pr-4">
+                      <div className="flex items-center justify-end gap-1">
+                        {doc.status === "ready" ? (
                           <Button
                             type="button"
                             variant="outline"
@@ -136,54 +214,101 @@ function DocumentsSection() {
                             disabled={actionsDisabled}
                             onClick={() => void handleOpenReview(doc.id)}
                           >
-                            {activeReview?.id === doc.id
-                              ? "Reviewing"
-                              : "Review extracted figures"}
+                            {activeReview?.id === doc.id ? (
+                              "Reviewing"
+                            ) : (
+                              <>
+                                Review
+                                <span className="max-sm:sr-only"> extracted figures</span>
+                              </>
+                            )}
                           </Button>
-                          <a
-                            href={documentFileUrl(activeWorkspace.id, doc.id)}
-                            target="_blank"
-                            rel="noreferrer"
-                            className={buttonVariants({ variant: "ghost", size: "sm" })}
+                        ) : doc.status === "failed" && !pendingRemoval ? (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            disabled={actionsDisabled}
+                            onClick={() => void handleRetryDocument(doc.id)}
                           >
-                            View PDF
-                          </a>
-                        </>
-                      ) : null}
-                      {doc.status === "failed" && doc.error_code !== "deletion_pending" ? (
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          disabled={actionsDisabled}
-                          onClick={() => void handleRetryDocument(doc.id)}
-                        >
-                          Retry processing
-                        </Button>
-                      ) : null}
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        disabled={actionsDisabled}
-                        onClick={() => void handleDeleteDocument(doc.id, doc.filename)}
-                      >
-                        Remove
-                      </Button>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="text-xs text-muted-foreground">
-                No PDFs uploaded for this workspace yet.
-              </p>
-            )}
-          </CardContent>
+                            Retry processing
+                          </Button>
+                        ) : null}
+                        {pendingRemoval ? (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            disabled={actionsDisabled}
+                            onClick={() =>
+                              void handleDeleteDocument(doc.id, doc.filename)
+                            }
+                          >
+                            Remove
+                          </Button>
+                        ) : (
+                          <DropdownMenu>
+                            <DropdownMenuTrigger
+                              disabled={actionsDisabled}
+                              render={
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon-sm"
+                                  aria-label={`More actions for ${doc.filename}`}
+                                />
+                              }
+                            >
+                              <HugeiconsIcon icon={MoreHorizontalIcon} />
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent
+                              align="end"
+                              className="min-w-40"
+                            >
+                              {doc.status === "ready" ? (
+                                <>
+                                  <DropdownMenuItem
+                                    render={
+                                      <a
+                                        href={documentFileUrl(
+                                          activeWorkspace.id,
+                                          doc.id,
+                                        )}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                      />
+                                    }
+                                  >
+                                    View PDF
+                                  </DropdownMenuItem>
+                                  <DropdownMenuSeparator />
+                                </>
+                              ) : null}
+                              <DropdownMenuItem
+                                variant="destructive"
+                                onClick={() =>
+                                  void handleDeleteDocument(
+                                    doc.id,
+                                    doc.filename,
+                                  )
+                                }
+                              >
+                                Remove
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        )}
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
         </Card>
-      ) : null}
+      )}
 
-      {session && activeWorkspace && activeReview ? (
+      {activeReview ? (
         <SourceReview
           key={activeReview.id}
           businessId={activeWorkspace.id}

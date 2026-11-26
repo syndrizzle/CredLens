@@ -37,6 +37,7 @@ type AnalysisOverviewProps = {
   data: AnalysisResponse;
   onOpenFinding: (yearStart: number, indicator: Indicator | "balance_check") => void;
   onOpenInput: (yearStart: number, field: FinancialFieldKey) => void;
+  onOpenAllActions: () => void;
 };
 
 function formatFinding(finding: Finding) {
@@ -61,9 +62,10 @@ const FLOW_CONFIG = {
 } as const;
 const MARGIN_CONFIG = { margin: { label: "Net profit margin", color: "green" } } as const;
 
-function AnalysisOverview({ data, onOpenFinding, onOpenInput }: AnalysisOverviewProps) {
+function AnalysisOverview({ data, onOpenFinding, onOpenInput, onOpenAllActions }: AnalysisOverviewProps) {
   const periods = [...data.periods].sort((a, b) => a.year_start - b.year_start);
   const latest = periods.at(-1)!;
+  const previous = periods.at(-2);
   const trend = periods.flatMap((period) => {
     const finding = period.indicators.find((item) => item.indicator === "net_profit_margin");
     const revenue = finding && inputValue(finding, "revenue");
@@ -80,6 +82,9 @@ function AnalysisOverview({ data, onOpenFinding, onOpenInput }: AnalysisOverview
     }];
   });
   const actions = data.actions ?? [];
+  // Inputs to fix or supply come first; supported findings to investigate wait in Analysis.
+  const unblocking = actions.filter((action) => action.category === "review" || action.category === "missing");
+  const nextActions = (unblocking.length > 0 ? unblocking : actions).slice(0, 3);
   const formatInr = compactInr(Math.max(...trend.map((row) => Math.abs(row.revenue))));
 
   return (
@@ -91,6 +96,7 @@ function AnalysisOverview({ data, onOpenFinding, onOpenInput }: AnalysisOverview
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {latest.indicators.map((finding) => {
             const supported = finding.state === "Supported" && finding.value !== null;
+            const prior = previous?.indicators.find((item) => item.indicator === finding.indicator);
             return (
               <Card key={finding.indicator}>
                 <CardHeader>
@@ -110,7 +116,14 @@ function AnalysisOverview({ data, onOpenFinding, onOpenInput }: AnalysisOverview
                     </Badge>
                   </CardAction>
                 </CardHeader>
-                {finding.reasons[0] ? (
+                {supported && prior ? (
+                  <CardFooter className="mt-auto text-sm text-muted-foreground">
+                    {financialYearLabel(previous!.year_start)}:
+                    <span className="ml-1 tabular-nums">
+                      {prior.state === "Supported" && prior.value !== null ? formatFinding(prior) : "no result"}
+                    </span>
+                  </CardFooter>
+                ) : finding.reasons[0] ? (
                   <CardFooter className="mt-auto border-t border-border py-3">
                     <Button
                       type="button"
@@ -197,17 +210,24 @@ function AnalysisOverview({ data, onOpenFinding, onOpenInput }: AnalysisOverview
 
       <Card>
         <CardHeader>
-          <CardTitle>Preparation actions</CardTitle>
+          <CardTitle>Next steps</CardTitle>
           <CardDescription>Workflow order, not a credit-risk ranking.</CardDescription>
+          {actions.length > nextActions.length ? (
+            <CardAction>
+              <Button type="button" variant="ghost" size="sm" onClick={onOpenAllActions}>
+                All {actions.length} actions
+              </Button>
+            </CardAction>
+          ) : null}
         </CardHeader>
         <CardContent>
           {!data.action_version ? (
-            <p className="text-sm">Analyse the saved workspace again to list preparation actions.</p>
+            <p className="text-sm">Analyse again to list preparation actions.</p>
           ) : actions.length === 0 ? (
             <p className="text-sm text-muted-foreground">No preparation actions for this analysis.</p>
           ) : (
             <ol className="flex flex-col divide-y divide-border">
-              {actions.map((action, index) => (
+              {nextActions.map((action, index) => (
                 <li key={index} className="flex flex-col gap-2 py-3 text-sm first:pt-0 last:pb-0">
                   <div className="flex flex-wrap items-start justify-between gap-2">
                     <p>{action.message}</p>

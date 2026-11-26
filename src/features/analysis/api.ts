@@ -176,7 +176,7 @@ export type DocumentCitation = {
 export type QAResponse = {
   question: string;
   answer: string;
-  mode: "ollama" | "fallback" | "deterministic";
+  mode: "model" | "fallback" | "deterministic";
   model: string | null;
   fallback_reason: string | null;
   retrieval_status: "ok" | "no_documents" | "unavailable";
@@ -720,7 +720,7 @@ function validQAResponse(value: unknown): value is QAResponse {
   return record(value) &&
     typeof value.question === "string" && value.question.length > 0 &&
     typeof value.answer === "string" && value.answer.length > 0 &&
-    (value.mode === "ollama" || value.mode === "fallback" || value.mode === "deterministic") &&
+    (value.mode === "model" || value.mode === "fallback" || value.mode === "deterministic") &&
     (value.model === null || typeof value.model === "string") &&
     (value.fallback_reason === null || typeof value.fallback_reason === "string") &&
     ["ok", "no_documents", "unavailable"].includes(value.retrieval_status as string) &&
@@ -730,6 +730,22 @@ function validQAResponse(value: unknown): value is QAResponse {
     Array.isArray(value.financial_citations) && value.financial_citations.every(validFinancialCitation) &&
     Array.isArray(value.document_citations) && value.document_citations.every(validDocumentCitation) &&
     Array.isArray(value.limitations) && value.limitations.every(item => typeof item === "string");
+}
+// Streamed answers send everything but the text as a `data-qa` part (backend `ui_message_stream`).
+export type QAMetadata = Omit<QAResponse, "answer">;
+export function validQAMetadata(value: unknown): value is QAMetadata {
+  return record(value) && !("answer" in value) && validQAResponse({ ...value, answer: "-" });
+}
+export function qaStreamUrl(businessId: string) {
+  return `/api/businesses/${encodeURIComponent(businessId)}/qa/stream`;
+}
+// The AI SDK transport throws with the HTTP status and the raw body; map them to the same messages as the JSON route.
+export function qaErrorMessage(error: Error): string {
+  const status = "statusCode" in error ? Number(error.statusCode) : null;
+  if (status === 401) return "Your session expired. Sign in again.";
+  if (status === 404) return "Business or document not found.";
+  if (status === 422) return "Enter a question between 1 and 500 characters.";
+  return "The assistant is unavailable. Check that the backend is running, then retry.";
 }
 function validReportSummary(value: unknown): value is ReportSummary {
   return record(value) &&

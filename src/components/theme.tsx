@@ -4,11 +4,15 @@ import { HugeiconsIcon } from "@hugeicons/react"
 import { Moon02Icon, Sun03Icon } from "@hugeicons/core-free-icons"
 
 import { Button } from "@/components/ui/button"
+import { Toaster } from "@/components/ui/sonner"
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 
@@ -62,27 +66,51 @@ function ThemeProvider({ children }: { children: ReactNode }) {
       }}
     >
       {children}
+      {/* Top centre: bottom-right toasts covered the Figures "Confirm present figures" button. */}
+      <Toaster theme={theme} position="top-center" />
     </ThemeContext.Provider>
   )
 }
 
-function ModeToggle() {
+function ThemeOptions() {
   const { theme, setTheme } = useContext(ThemeContext)
   return (
+    <DropdownMenuRadioGroup value={theme} onValueChange={(value: Theme) => setTheme(value)}>
+      <DropdownMenuRadioItem value="light" closeOnClick>Light</DropdownMenuRadioItem>
+      <DropdownMenuRadioItem value="dark" closeOnClick>Dark</DropdownMenuRadioItem>
+      <DropdownMenuRadioItem value="system" closeOnClick>System</DropdownMenuRadioItem>
+    </DropdownMenuRadioGroup>
+  )
+}
+
+function ModeToggle() {
+  return (
     <DropdownMenu>
-      <DropdownMenuTrigger render={<Button variant="outline" size="icon" aria-label="Theme" />}>
+      <DropdownMenuTrigger render={<Button variant="ghost" size="icon" aria-label="Theme" />}>
         <HugeiconsIcon icon={Sun03Icon} className="dark:hidden" />
         <HugeiconsIcon icon={Moon02Icon} className="hidden dark:block" />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
-        <DropdownMenuRadioGroup value={theme} onValueChange={(value: Theme) => setTheme(value)}>
-          <DropdownMenuRadioItem value="light" closeOnClick>Light</DropdownMenuRadioItem>
-          <DropdownMenuRadioItem value="dark" closeOnClick>Dark</DropdownMenuRadioItem>
-          <DropdownMenuRadioItem value="system" closeOnClick>System</DropdownMenuRadioItem>
-        </DropdownMenuRadioGroup>
+        <ThemeOptions />
       </DropdownMenuContent>
     </DropdownMenu>
   )
 }
 
-export { ModeToggle, ThemeProvider }
+// Submenu for the account menu, so the header does not need its own theme button.
+function ThemeSubmenu() {
+  return (
+    <DropdownMenuSub>
+      <DropdownMenuSubTrigger>
+        <HugeiconsIcon icon={Sun03Icon} className="dark:hidden" />
+        <HugeiconsIcon icon={Moon02Icon} className="hidden dark:block" />
+        Theme
+      </DropdownMenuSubTrigger>
+      <DropdownMenuSubContent>
+        <ThemeOptions />
+      </DropdownMenuSubContent>
+    </DropdownMenuSub>
+  )
+}
+
+export { ModeToggle, ThemeProvider, ThemeSubmenu }

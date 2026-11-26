@@ -234,6 +234,18 @@ export function resetReview(
   ) as PeriodDraft["figures"];
 }
 
+export function confirmPresent(periods: PeriodDraft[]): PeriodDraft[] {
+  return periods.map((period) => ({
+    ...period,
+    figures: Object.fromEntries(
+      FINANCIAL_FIELDS.map((field) => {
+        const figure = period.figures[field.key];
+        return [field.key, { ...figure, reviewed: figure.raw.trim() !== "" }];
+      }),
+    ) as PeriodDraft["figures"],
+  }));
+}
+
 export function isDocumentFigure(figure: {
   raw?: string | null;
   origin?: FigureOrigin;

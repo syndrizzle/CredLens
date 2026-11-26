@@ -2,6 +2,7 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { RouterProvider, createMemoryHistory, createRootRoute, createRouter } from "@tanstack/react-router";
+import { Toaster } from "sonner";
 import { Workspace } from "../src/features/workspace/Workspace";
 import { analysisRequest } from "../src/features/analysis/api";
 import { createExampleForm } from "../src/features/manual-entry/model";
@@ -62,10 +63,24 @@ globalThis.fetch = async (input, options) => {
     reportSignal = options?.signal;
     return reportPending.promise;
   }
-  if (path.endsWith("/qa")) return qaPending.promise;
+  if (path.endsWith("/qa/stream")) return qaPending.promise;
   if (path.includes("/documents")) return docPending.promise;
   return path.endsWith("/analysis") ? analysisPending.promise : pending.promise;
 };
+// Mirrors backend `ui_message_stream`: metadata part, text deltas, then [DONE].
+function uiMessageStream({ answer, ...qa }: { answer: string } & Record<string, unknown>) {
+  const events = [
+    { type: "start" },
+    { type: "data-qa", data: qa },
+    { type: "text-start", id: "answer" },
+    ...answer.match(/\s*\S+/g)!.map(delta => ({ type: "text-delta", id: "answer", delta })),
+    { type: "text-end", id: "answer" },
+    { type: "finish" },
+  ];
+  return new Response(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join("") + "data: [DONE]\n\n", {
+    headers: { "content-type": "text/event-stream", "x-vercel-ai-ui-message-stream": "v1" },
+  });
+}
 const switcher = () => document.querySelector<HTMLButtonElement>("#workspace-switcher")!;
 const account = () => document.querySelector<HTMLButtonElement>("#account-menu")!;
 async function settled(ready: () => boolean) {
@@ -95,23 +110,29 @@ async function run() {
   const root = createRoot(document.getElementById("root")!);
   // No section prop: every section renders on one page, so checks can span the whole workflow.
   const router = createRouter({ routeTree: createRootRoute({ component: () => <Workspace /> }), history: createMemoryHistory() });
-  await act(async () => root.render(<RouterProvider router={router} />));
-  check(name().matches(":disabled"), "Session restoration locks competing account actions");
+  // Action notices are toasts, so the page needs a Toaster as in the app.
+  await act(async () => root.render(<><RouterProvider router={router} /><Toaster /></>));
+  check(!name() && Boolean(document.querySelector('[aria-label="Checking your session"]')), "Session restoration shows a loading state instead of competing actions");
   await act(async () => restoration.resolve(Response.json({ owner_id: "owner", email: "owner@example.com" })));
+  check(calls.includes("GET /api/businesses/a"), "Restored session opens the newest saved business");
+  await act(async () => pending.resolve(Response.json({}, { status: 503 })));
+  pending = deferred();
+  check(name()?.value === "", "A failed open after restoration leaves an empty draft");
   await rename("Unsaved draft");
-  await fromMenu(switcher(), "New workspace");
+  await fromMenu(switcher(), "New business");
   check(name().value === "Unsaved draft", "New workspace waits for confirmation");
   await click(button("Keep editing"));
   check(name().value === "Unsaved draft", "Cancel keeps draft");
 
+  const opensBeforeSwitch = calls.filter(call => call === "GET /api/businesses/a").length;
   await chooseWorkspace("Business a");
-  check(!calls.includes("GET /api/businesses/a"), "Switch waits for confirmation before fetching");
+  check(calls.filter(call => call === "GET /api/businesses/a").length === opensBeforeSwitch, "Switch waits for confirmation before fetching");
   await click(button("Keep editing"));
   check(name().value === "Unsaved draft", "Cancelled switch keeps draft");
 
   await act(async () => {
-    button("Save workspace").click();
-    button("Save workspace").click();
+    button("Save").click();
+    button("Save").click();
   });
   check(calls.filter(call => call === "POST /api/businesses").length === 1, "Same-turn double save sends one request");
   check(name().matches(":disabled"), "Name locked during save");
@@ -150,7 +171,7 @@ async function run() {
     }],
   })));
   check(name().value === "Business a", "Load applies selected workspace");
-  check(text().includes("Source PDF documents") && text().includes("Aster_FY24.pdf") && text().includes("Failed"), "Loaded workspace renders failed/interrupted PDF document");
+  check(text().includes("Aster_FY24.pdf") && text().includes("Failed"), "Loaded workspace renders failed/interrupted PDF document");
 
   docPending = deferred();
   await click(button("Retry processing"));
@@ -169,7 +190,7 @@ async function run() {
     created_at: "2026-11-17T10:00:00Z",
     updated_at: "2026-11-17T10:00:05Z",
   })));
-  check(text().includes("Ready") && text().includes("3 pages") && text().includes("View PDF"), "Retried PDF transitions to Ready with page count and View PDF link");
+  check(text().includes("Ready") && text().includes("3 pages") && Boolean(document.querySelector('button[aria-label="More actions for Aster_FY24.pdf"]')), "Retried PDF transitions to Ready with page count and a file menu");
 
   // P3-03 page-linked source review: open extraction, inspect page 2 cell, apply candidate, confirm individually, edit -> manual, and detach on PDF delete.
   docPending = deferred();
@@ -327,22 +348,22 @@ async function run() {
   check(text().includes("Saved revision 2 supersedes earlier analysis runs"), "Superseded status shown when saved revision has no current analysis");
 
   // P4-03 focused Q&A checks on saved workspace
-  const qaInput = document.querySelector<HTMLInputElement>("#qa-question")!;
+  const qaInput = document.querySelector<HTMLTextAreaElement>("#qa-question")!;
   check(Boolean(qaInput) && !qaInput.matches(":disabled"), "Saved clean workspace enables Q&A input");
   await act(async () => {
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(qaInput, "Why did net profit margin change?");
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(qaInput, "Why did net profit margin change?");
     qaInput.dispatchEvent(new Event("input", { bubbles: true }));
   });
   qaPending = deferred();
   await click(button("Ask question"));
-  check(calls.includes("POST /api/businesses/a/qa"), "Ask question posts to workspace Q&A endpoint");
+  check(calls.includes("POST /api/businesses/a/qa/stream"), "Ask question posts to the streaming Q&A endpoint");
   check(qaInput.matches(":disabled"), "Q&A input locks while assembling answer");
-  await act(async () => qaPending.resolve(Response.json({
+  await act(async () => qaPending.resolve(uiMessageStream({
     question: "Why did net profit margin change?",
     answer: "Deterministic summary: net profit margin moved from 9.00% [F2] to 5.00% [F9]. Borrowings exclude leases [D1].",
     mode: "fallback",
     model: null,
-    fallback_reason: "Local explanation model (Ollama) is not reachable at the configured loopback address.",
+    fallback_reason: "Explanation model is not reachable.",
     retrieval_status: "ok",
     retrieval_note: null,
     input_revision: 2,
@@ -359,7 +380,11 @@ async function run() {
     }],
     limitations: ["Q&A explains reviewed figures and authorised excerpts only."],
   })));
-  check(text().includes("Template fallback") && text().includes("Local explanation model unavailable"), "Q&A shows explicit fallback badge and reason");
+  await settled(() => text().includes("Template fallback"));
+  check(text().includes("Template fallback") && text().includes("Explanation model unavailable"), "Q&A shows explicit fallback badge and reason");
+  check(text().includes("Why did net profit margin change?") && qaInput.value === "", "Asked question appears in the thread and the field clears");
+  await click(button("Used 2 sources"));
+  await settled(() => Boolean(document.querySelector('a[href="/api/businesses/a/documents/doc-1/file#page=3"]')));
   check(text().includes("[F2]") && text().includes("9.00%") && text().includes("[D1]") && Boolean(document.querySelector('a[href="/api/businesses/a/documents/doc-1/file#page=3"]')), "Q&A renders verified financial and page-linked document citations");
 
   // P5-01 printable preparation report & supersession checks
@@ -417,13 +442,13 @@ async function run() {
   check(button("Generate preparation report").matches(":disabled"), "Unsaved edits disable generating a new report until saved");
   check(text().includes("Unsaved edits present") && document.querySelector<HTMLInputElement>("#qa-question")!.matches(":disabled"), "Unsaved edits disable Q&A until saved");
   pending = deferred();
-  await click(button("Save workspace"));
+  await click(button("Save"));
   await act(async () => pending.resolve(Response.json({ detail: "Workspace has been updated in another session; reload before saving" }, { status: 409 })));
   check(name().value === "Draft with revision conflict" && text().includes("updated in another session") && !name().matches(":disabled"), "409 conflict preserves draft and warns user");
 
   await rename("Draft after save failure");
   pending = deferred();
-  await click(button("Save workspace"));
+  await click(button("Save"));
   await act(async () => pending.resolve(Response.json({}, { status: 503 })));
   check(name().value === "Draft after save failure" && !name().matches(":disabled"), "Failed save keeps draft and unlocks editor");
 
@@ -445,26 +470,26 @@ async function run() {
 
   // P5-02 activity log & workspace deletion with backup disclosure checks
   auditPending = deferred();
-  await click(button("Activity log"));
+  await click(button("Refresh"));
   check(calls.some(call => call.startsWith("GET /api/audit-events")), "Activity log fetches owner audit events");
   await act(async () => auditPending.resolve(Response.json([{
     id: "ev-1", owner_id: "owner", action: "report_generated", resource_type: "report",
     resource_id: "r2", business_id: "a", details: { report_version: 2 }, created_at: "2026-11-21T15:00:00Z",
   }])));
-  check(text().includes("report_generated") && text().includes("no financial payloads"), "Activity log renders minimal audit events");
+  check(text().includes("report_generated") && text().includes("Financial figures are never logged"), "Activity log renders minimal audit events");
 
-  await fromMenu(switcher(), "Delete workspace");
+  await fromMenu(switcher(), "Delete business");
   check(text().includes("Backup limitation") && text().includes("not immediately purged"), "Delete workspace confirmation discloses backup retention limits");
   await click(button("Cancel"));
   await settled(() => !document.querySelector('[role="alertdialog"]'));
-  check(!text().includes("Delete workspace permanently"), "Cancelling delete keeps workspace intact");
+  check(!text().includes("Delete business permanently"), "Cancelling delete keeps workspace intact");
 
   reportPending = deferred();
   await click(button("Viewing"));
-  await fromMenu(switcher(), "Delete workspace");
+  await fromMenu(switcher(), "Delete business");
   pending = deferred();
   auditPending = deferred();
-  await click(button("Delete workspace permanently"));
+  await click(button("Delete business permanently"));
   check(calls.includes("DELETE /api/businesses/a"), "Confirmed workspace deletion sends DELETE /api/businesses/{id}");
   await act(async () => {
     pending.resolve(Response.json({
@@ -486,14 +511,23 @@ async function run() {
   check(!document.querySelector("#preparation-report-sheet"), "A late report cannot open in another workspace");
 
   await rename("Temporary draft");
-  await fromMenu(switcher(), "New workspace");
+  await fromMenu(switcher(), "New business");
   await click(button("Discard and continue"));
   check(name().value === "", "Confirmed new workspace clears draft");
   await rename("Last draft");
   logoutFailure = null;
   await fromMenu(account(), "Sign out");
   await click(button("Discard and continue"));
-  check(name().value === "" && text().includes("Signed out. Workspace entries cleared"), "Successful logout clears draft and confirms success");
+  check(!name() && Boolean(document.querySelector("#auth-email")) && text().includes("Signed out. Entries were cleared"), "Successful logout returns to sign-in and confirms success");
+
+  const analysesBeforeGuest = calls.filter(call => call === "POST /api/analysis").length;
+  const callsBeforeGuest = calls.length;
+  await click(button("Continue as guest"));
+  check(name()?.value === "Aster Components (fictional)" && text().includes("24/24"), "Guest demo opens the fictional company with confirmed figures");
+  check(calls.filter(call => call === "POST /api/analysis").length === analysesBeforeGuest + 1, "Guest demo runs the stateless analysis once");
+  check(calls.slice(callsBeforeGuest).every(call => call === "POST /api/analysis"), "Guest demo creates no server data");
+  await fromMenu(account(), "Exit demo");
+  check(!name() && Boolean(document.querySelector("#auth-email")), "Exiting the demo returns to sign-in");
   await act(async () => root.unmount());
 }
 run().then(() => {

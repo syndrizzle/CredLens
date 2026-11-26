@@ -4,7 +4,7 @@ from uuid import UUID
 
 from fastapi import FastAPI, File, HTTPException, Query, Request, Response, UploadFile
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.analysis_runs import load_analysis
@@ -39,7 +39,7 @@ from app.persistence import (
     save_business,
     update_business,
 )
-from app.qa import answer_workspace_question, load_qa_context
+from app.qa import answer_workspace_question, load_qa_context, ui_message_stream
 from app.reports import generate_report, list_reports, load_report
 from app.retrieval import EmbeddingUnavailableError, retrieve_passages
 from app.schemas.audit import AuditEventSummary
@@ -435,6 +435,19 @@ def ask_business_question(
         payload.question,
         year_start=payload.year_start,
         document_selected=payload.document_id is not None,
+    )
+
+
+@app.post("/api/businesses/{business_id}/qa/stream")
+def stream_business_question(
+    business_id: UUID, payload: QARequest, request: Request
+) -> StreamingResponse:
+    # Errors raise before the stream starts, so the client still sees the HTTP status.
+    answer = ask_business_question(business_id, payload, request)
+    return StreamingResponse(
+        ui_message_stream(answer, business_id),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Vercel-AI-UI-Message-Stream": "v1", "X-Accel-Buffering": "no"},
     )
 
 

@@ -17,10 +17,11 @@ from app.database import get_engine
 from app.main import app
 import app.main as main_module
 from app.models import businesses, owners
-from app.ollama import OllamaUnavailableError, _read_ollama_config, call_local_ollama
+from app.llm import ModelUnavailableError, _read_model_config, call_model
 from app.qa import (
     QAContext,
     answer_workspace_question,
+    ui_message_stream,
 )
 from app.schemas.auth import SessionResponse
 from app.schemas.evidence import QARequest, RetrievedPassage
@@ -100,83 +101,80 @@ def test_qa_request_schema_enforces_bounds():
             QARequest.model_validate(bad)
 
 
-def test_ollama_config_enforces_loopback_and_local_models(monkeypatch):
-    monkeypatch.delenv("OLLAMA_DISABLED", raising=False)
-    monkeypatch.setenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
-    monkeypatch.setenv("OLLAMA_MODEL", "qwen3:4b")
-    cfg = _read_ollama_config()
-    assert cfg.base_url == "http://127.0.0.1:11434"
-    assert cfg.model == "qwen3:4b"
-    assert cfg.num_ctx == 4096
-    assert cfg.num_predict == 1024
-
-    for bad_url in ("https://127.0.0.1:11434", "http://10.0.0.5:11434", "https://api.example.com"):
-        monkeypatch.setenv("OLLAMA_BASE_URL", bad_url)
-        with pytest.raises(OllamaUnavailableError, match="loopback"):
-            _read_ollama_config()
-
-    monkeypatch.setenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
-    for bad_model in ("qwen3:4b-cloud", "qwen3:cloud", "ollama.com/qwen3:4b"):
-        monkeypatch.setenv("OLLAMA_MODEL", bad_model)
-        with pytest.raises(OllamaUnavailableError, match="Cloud"):
-            _read_ollama_config()
-
-    monkeypatch.setenv("OLLAMA_MODEL", "qwen3:4b")
-    monkeypatch.setenv("OLLAMA_DISABLED", "1")
-    with pytest.raises(OllamaUnavailableError, match="disabled"):
-        _read_ollama_config()
+def _configure_model(monkeypatch, url="https://credlens-ai.example.workers.dev/v1/answer"):
+    monkeypatch.delenv("CREDLENS_AI_DISABLED", raising=False)
+    monkeypatch.setenv("CREDLENS_AI_URL", url)
+    monkeypatch.setenv("CREDLENS_AI_TOKEN", "test-token")
 
 
-def test_call_local_ollama_sends_d04_options_and_strips_thinking(monkeypatch):
-    monkeypatch.delenv("OLLAMA_DISABLED", raising=False)
-    monkeypatch.setenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
-    monkeypatch.setenv("OLLAMA_MODEL", "qwen3:4b")
+def test_model_config_requires_https_token_and_respects_disable(monkeypatch):
+    _configure_model(monkeypatch)
+    cfg = _read_model_config()
+    assert cfg.url == "https://credlens-ai.example.workers.dev/v1/answer"
+    assert cfg.token == "test-token"
+    assert cfg.timeout_seconds == 30.0
 
+    monkeypatch.setenv("CREDLENS_AI_URL", "http://127.0.0.1:8787/v1/answer")
+    assert _read_model_config().url.startswith("http://127.0.0.1")
+
+    for bad_url in ("http://api.example.com/v1/answer", "ftp://example.com", "https://"):
+        monkeypatch.setenv("CREDLENS_AI_URL", bad_url)
+        with pytest.raises(ModelUnavailableError, match="HTTPS"):
+            _read_model_config()
+
+    _configure_model(monkeypatch)
+    monkeypatch.setenv("CREDLENS_AI_TOKEN", "")
+    with pytest.raises(ModelUnavailableError, match="not configured"):
+        _read_model_config()
+
+    _configure_model(monkeypatch)
+    monkeypatch.setenv("CREDLENS_AI_DISABLED", "1")
+    with pytest.raises(ModelUnavailableError, match="disabled"):
+        _read_model_config()
+
+
+def test_call_model_sends_prompts_with_bearer_token_and_validates_reply(monkeypatch):
+    _configure_model(monkeypatch)
     captured: dict = {}
+    reply: dict = {"body": {"model": "@cf/google/gemma-4-26b-a4b-it", "content": " Net profit margin was 9.00% [F2]. "}}
 
     class _FakeResp:
-        status = 200
-
         def __enter__(self):
             return self
 
         def __exit__(self, *args):
             return False
 
-        def read(self):
-            return json.dumps(
-                {
-                    "message": {
-                        "role": "assistant",
-                        "thinking": "PRIVATE CHAIN OF THOUGHT THAT MUST NEVER BE SHOWN",
-                        "content": "Net profit margin was 9.00% in FY 2023-24 [F2] and 5.00% in FY 2024-25 [F9].",
-                    }
-                }
-            ).encode("utf-8")
+        def read(self, _limit):
+            return json.dumps(reply["body"]).encode("utf-8")
 
     def fake_urlopen(req, timeout):
         captured["url"] = req.full_url
+        captured["auth"] = req.get_header("Authorization")
+        captured["agent"] = req.get_header("User-agent")
         captured["timeout"] = timeout
         captured["payload"] = json.loads(req.data.decode("utf-8"))
         return _FakeResp()
 
-    monkeypatch.setattr("app.ollama.urlopen", fake_urlopen)
-    model, content = call_local_ollama("sys", "usr")
-    assert model == "qwen3:4b"
-    assert "PRIVATE CHAIN OF THOUGHT" not in content
-    assert "9.00%" in content
-    assert captured["url"] == "http://127.0.0.1:11434/api/chat"
-    assert captured["payload"]["think"] is True
-    assert captured["payload"]["stream"] is False
-    assert captured["payload"]["options"] == {
-        "num_ctx": 4096,
-        "temperature": 0,
-        "seed": 42,
-        "num_predict": 1024,
+    monkeypatch.setattr("app.llm.urlopen", fake_urlopen)
+    model, content = call_model("sys", "usr")
+    assert model == "@cf/google/gemma-4-26b-a4b-it"
+    assert content == "Net profit margin was 9.00% [F2]."
+    assert captured == {
+        "url": "https://credlens-ai.example.workers.dev/v1/answer",
+        "auth": "Bearer test-token",
+        "agent": "CredLens-backend",
+        "timeout": 30.0,
+        "payload": {"system": "sys", "user": "usr"},
     }
 
+    for bad in ({"model": "m", "content": "  "}, {"error": "model_unavailable"}, ["not", "a", "dict"]):
+        reply["body"] = bad
+        with pytest.raises(ModelUnavailableError, match="empty answer"):
+            call_model("sys", "usr")
 
-def test_ollama_mode_verifies_citations_and_strips_hallucinated_ids():
+
+def test_model_mode_verifies_citations_and_strips_hallucinated_ids():
     ctx = _sample_context()
     seen_prompt: dict[str, str] = {}
 
@@ -192,7 +190,7 @@ def test_ollama_mode_verifies_citations_and_strips_hallucinated_ids():
     resp = answer_workspace_question(
         ctx, "Explain the net profit margin and borrowings note", llm_caller=fake_llm
     )
-    assert resp.mode == "ollama"
+    assert resp.mode == "model"
     assert resp.model == "qwen3:4b"
     assert resp.fallback_reason is None
     assert "[D99]" not in resp.answer
@@ -205,6 +203,18 @@ def test_ollama_mode_verifies_citations_and_strips_hallucinated_ids():
     cited_doc = {c.citation_id for c in resp.document_citations if c.cited}
     assert cited_fin == {"F2", "F9"}
     assert cited_doc == {"D1"}
+
+
+def test_grouped_model_citations_are_split_and_verified_individually():
+    resp = answer_workspace_question(
+        _sample_context(),
+        "Explain the net profit margin and borrowings note",
+        llm_caller=lambda _s, _u: ("@cf/google/gemma-4-26b-a4b-it", "Margin fell [F2, F9]; leases are excluded [D1; D99]."),
+    )
+    assert resp.mode == "model"
+    assert resp.answer == "Margin fell [F2] [F9]; leases are excluded [D1]."
+    assert {c.citation_id for c in resp.financial_citations if c.cited} == {"F2", "F9"}
+    assert {c.citation_id for c in resp.document_citations if c.cited} == {"D1"}
 
 
 def test_injected_or_forbidden_llm_verdict_reverts_to_deterministic_refusal():
@@ -226,8 +236,8 @@ def test_fallback_handles_numerical_causal_missing_interest_and_document_questio
     def unreachable(_req, timeout):
         raise URLError("Connection refused")
 
-    monkeypatch.delenv("OLLAMA_DISABLED", raising=False)
-    monkeypatch.setattr("app.ollama.urlopen", unreachable)
+    _configure_model(monkeypatch)
+    monkeypatch.setattr("app.llm.urlopen", unreachable)
 
     # 1. Causal margin question -> reports exact Python values + refuses unsupported cause + cites passage.
     ctx = _sample_context()
@@ -303,7 +313,7 @@ def test_qa_route_enforces_auth_ownership_and_graceful_fallback(monkeypatch):
     monkeypatch.setattr(main_module, "db_transaction", fake_tx)
     monkeypatch.setattr(main_module, "require_session", fake_require_session)
     monkeypatch.setattr(main_module, "load_qa_context", fake_load_qa_context)
-    monkeypatch.setenv("OLLAMA_DISABLED", "1")
+    monkeypatch.setenv("CREDLENS_AI_DISABLED", "1")
 
     client = TestClient(app)
 
@@ -340,6 +350,40 @@ def test_qa_route_enforces_auth_ownership_and_graceful_fallback(monkeypatch):
     assert "INR 2000000.00" in body["answer"]
     assert "INR 2500000.00" in body["answer"]
 
+    # Streaming route: same checks before the stream starts, then the checked answer as UI message events.
+    anon = TestClient(app)
+    assert anon.post(f"/api/businesses/{biz_a}/qa/stream", json={"question": "What is working capital?"}).status_code == 401
+    assert client.post(f"/api/businesses/{other_biz}/qa/stream", json={"question": "What is working capital?"}).status_code == 404
+    assert client.post(f"/api/businesses/{biz_a}/qa/stream", json={"question": ""}).status_code == 422
+    streamed = client.post(f"/api/businesses/{biz_a}/qa/stream", json={"question": "What is working capital?"})
+    assert streamed.status_code == 200
+    assert streamed.headers["content-type"].startswith("text/event-stream")
+    assert streamed.headers["x-vercel-ai-ui-message-stream"] == "v1"
+    frames = [line.removeprefix("data: ") for line in streamed.text.split("\n\n") if line]
+    assert frames[-1] == "[DONE]"
+    chunks = [json.loads(frame) for frame in frames[:-1]]
+    assert chunks[0] == {"type": "start"} and chunks[-1] == {"type": "finish"}
+    meta = next(c for c in chunks if c["type"] == "data-qa")["data"]
+    assert "answer" not in meta and meta["mode"] == "fallback" and meta["financial_citations"]
+    text = "".join(c["delta"] for c in chunks if c["type"] == "text-delta")
+    assert text == body["answer"]
+
+
+def test_ui_message_stream_sends_cited_documents_as_page_links():
+    biz = uuid4()
+    resp = answer_workspace_question(_sample_context(), "What do the borrowing notes say?", llm_caller=lambda _s, _u: (
+        "@cf/google/gemma-4-26b-a4b-it", "Borrowings exclude leases [D1]."))
+    chunks = [json.loads(frame.removeprefix("data: ")) for frame in ui_message_stream(resp, biz) if frame != "data: [DONE]\n\n"]
+    sources = [c for c in chunks if c["type"] == "source-url"]
+    doc = next(c for c in resp.document_citations if c.citation_id == "D1")
+    assert sources == [{
+        "type": "source-url",
+        "sourceId": "D1",
+        "url": f"/api/businesses/{biz}/documents/{doc.document_id}/file#page={doc.page_number}",
+        "title": f"{doc.filename}, p. {doc.page_number}",
+    }]
+    assert "".join(c["delta"] for c in chunks if c["type"] == "text-delta") == resp.answer
+
 
 @pytest.mark.skipif(
     not os.getenv("PERSISTENCE_TEST_URL"),
@@ -350,7 +394,7 @@ def test_live_qa_end_to_end_ownership_and_citations(monkeypatch):
     import shutil
 
     monkeypatch.setenv("DATABASE_URL", os.environ["PERSISTENCE_TEST_URL"])
-    monkeypatch.setenv("OLLAMA_DISABLED", "1")
+    monkeypatch.setenv("CREDLENS_AI_DISABLED", "1")
     storage_dir = (
         Path(__file__).resolve().parents[1] / ".storage" / f"test_qa_{uuid4().hex[:8]}"
     )

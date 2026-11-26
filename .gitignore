@@ -35,3 +35,10 @@ backend/.storage/
 .env.*
 !.env.example
 .neon
+
+# Local UI review captures
+.ui-review/
+
+# Cloudflare Worker local secrets and state
+.dev.vars*
+.wrangler/

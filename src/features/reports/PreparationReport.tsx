@@ -8,14 +8,11 @@ import {
 import { Logo } from "@/components/logo";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
+import { Spinner } from "@/components/ui/spinner";
+import { Table, TableBody, TableCaption, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 import {
   ACTION_CATEGORIES,
   INDICATORS,
@@ -39,7 +36,6 @@ import {
 
 type PreparationReportPanelProps = {
   businessId: string;
-  businessName: string;
   inputRevision: number;
   runs: AnalysisRunSummary[];
   hasUnsavedChanges: boolean;
@@ -95,9 +91,10 @@ function normalizedByKey(
   return map;
 }
 
+const createdAt = new Intl.DateTimeFormat("en-IN", { dateStyle: "medium", timeStyle: "short" });
+
 export function PreparationReportPanel({
   businessId,
-  businessName,
   inputRevision,
   runs,
   hasUnsavedChanges,
@@ -152,105 +149,89 @@ export function PreparationReportPanel({
   }
 
   return (
-    <section
-      className="space-y-4"
-      aria-labelledby="preparation-report-panel-heading"
-    >
-      <Card className="print:hidden">
-        <CardHeader>
-          <CardTitle>
-            <h2 id="preparation-report-panel-heading">Preparation report</h2>
-          </CardTitle>
-          <CardDescription>
-            A printable summary of {businessName} for your accountant or lender
-            discussion. Corrections supersede earlier versions, so you can tell
-            which one is current.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="flex flex-wrap gap-2">
-            <Button
-              type="button"
-              size="sm"
-              onClick={() => void handleReportRequest()}
-              disabled={disabled || loading || hasUnsavedChanges}
-            >
-              {loading
-                ? "Preparing report…"
-                : "Generate preparation report"}
-            </Button>
-            {activeReport ? (
-              <>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => window.print()}
-                  disabled={disabled || loading}
-                >
-                  Print / Save as PDF
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => onActiveReportChange(null)}
-                  disabled={loading}
-                >
-                  Close report
-                </Button>
-              </>
-            ) : null}
-          </div>
-          {hasUnsavedChanges ? (
-            <Alert>
-              <HugeiconsIcon icon={InformationCircleIcon} />
-              <AlertTitle>Unsaved edits present</AlertTitle>
-              <AlertDescription>
-                Save your workspace edits before generating a new preparation
-                report so the report matches your latest figures.
-              </AlertDescription>
-            </Alert>
+    <section className="flex flex-col gap-6" aria-labelledby="preparation-report-panel-heading">
+      <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3 print:hidden">
+        <div className="min-w-0 space-y-1">
+          <h1 id="preparation-report-panel-heading" className="font-heading text-2xl font-semibold tracking-tight">
+            Reports
+          </h1>
+          <p className="text-sm text-muted-foreground">
+            Printable summaries to share with your accountant or lender. Corrections supersede earlier versions.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {activeReport ? (
+            <>
+              <Button type="button" variant="ghost" onClick={() => onActiveReportChange(null)} disabled={loading}>
+                Close report
+              </Button>
+              <Button type="button" variant="outline" onClick={() => window.print()} disabled={disabled || loading}>
+                Print / Save as PDF
+              </Button>
+            </>
           ) : null}
+          <Button
+            type="button"
+            onClick={() => void handleReportRequest()}
+            disabled={disabled || loading || hasUnsavedChanges}
+          >
+            {loading ? <Spinner /> : null}
+            {loading ? "Preparing report…" : "Generate preparation report"}
+          </Button>
+        </div>
+      </div>
 
-          {error ? (
-            <Alert variant="destructive">
-              <HugeiconsIcon icon={Alert02Icon} />
-              <AlertTitle>Report could not be loaded</AlertTitle>
-              <AlertDescription>{error}</AlertDescription>
-            </Alert>
-          ) : null}
+      {hasUnsavedChanges ? (
+        <Alert className="print:hidden">
+          <HugeiconsIcon icon={InformationCircleIcon} />
+          <AlertTitle>Unsaved edits present</AlertTitle>
+          <AlertDescription>
+            Save your edits before generating a new report so it matches your latest figures.
+          </AlertDescription>
+        </Alert>
+      ) : null}
 
-          {runs.length > 0 ? (
-            <div className="space-y-2">
-              <h3 className="text-sm font-medium">
-                Versions ({runs.length})
-              </h3>
-              <ul className="divide-y divide-border rounded-lg border border-border">
-                {runs.map((run) => {
-                  const version = versionByRunId.get(run.run_id) ?? 1;
-                  const isCurrent =
-                    !run.superseded && run.input_revision === inputRevision;
-                  const isOpen = activeReport?.report_id === run.run_id;
-                  return (
-                    <li
-                      key={run.run_id}
-                      className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 text-sm"
-                    >
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="font-medium">
-                          Report v{version} · Input revision{" "}
-                          {run.input_revision}
-                        </span>
-                        <Badge
-                          variant={isCurrent ? "secondary" : "outline"}
-                        >
-                          {isCurrent ? "Current" : "Superseded"}
-                        </Badge>
-                        <span className="text-xs text-muted-foreground">
-                          {run.rule_version}
-                        </span>
-                      </div>
+      {error ? (
+        <Alert variant="destructive" className="print:hidden">
+          <HugeiconsIcon icon={Alert02Icon} />
+          <AlertTitle>Report could not be loaded</AlertTitle>
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      ) : null}
+
+      {runs.length > 0 ? (
+        <Card className="py-0 print:hidden">
+          <Table>
+            <TableCaption className="sr-only">Versions ({runs.length})</TableCaption>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="pl-4">Version</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead className="hidden sm:table-cell">Created</TableHead>
+                <TableHead className="hidden md:table-cell">Rules</TableHead>
+                <TableHead className="pr-4 text-right">
+                  <span className="sr-only">Actions</span>
+                </TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {runs.map((run) => {
+                const version = versionByRunId.get(run.run_id) ?? 1;
+                const isCurrent = !run.superseded && run.input_revision === inputRevision;
+                const isOpen = activeReport?.report_id === run.run_id;
+                return (
+                  <TableRow key={run.run_id} data-state={isOpen ? "selected" : undefined}>
+                    <TableCell className="pl-4 font-medium">
+                      Report v{version} · Input revision {run.input_revision}
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant={isCurrent ? "secondary" : "outline"}>{isCurrent ? "Current" : "Superseded"}</Badge>
+                    </TableCell>
+                    <TableCell className="hidden text-muted-foreground sm:table-cell">
+                      <time dateTime={run.created_at}>{createdAt.format(new Date(run.created_at))}</time>
+                    </TableCell>
+                    <TableCell className="hidden text-xs text-muted-foreground md:table-cell">{run.rule_version}</TableCell>
+                    <TableCell className="pr-4 text-right">
                       <Button
                         type="button"
                         variant={isOpen ? "secondary" : "outline"}
@@ -258,25 +239,25 @@ export function PreparationReportPanel({
                         disabled={disabled || loading}
                         onClick={() => void handleReportRequest(run.run_id)}
                       >
-                        {isOpen
-                          ? "Viewing"
-                          : isCurrent
-                            ? "Open current report"
-                            : "Open superseded report"}
+                        {isOpen ? "Viewing" : isCurrent ? "Open current report" : "Open superseded report"}
                       </Button>
-                    </li>
-                  );
-                })}
-              </ul>
-            </div>
-          ) : (
-            <p className="text-xs text-muted-foreground">
-              No report generated yet for this workspace. Generate a report to
-              create Report v1 at input revision {inputRevision}.
-            </p>
-          )}
-        </CardContent>
-      </Card>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        </Card>
+      ) : (
+        <Empty className="border border-dashed border-border print:hidden">
+          <EmptyHeader>
+            <EmptyTitle>No reports yet</EmptyTitle>
+            <EmptyDescription>
+              Generate a report to create Report v1 at input revision {inputRevision}.
+            </EmptyDescription>
+          </EmptyHeader>
+        </Empty>
+      )}
 
       {activeReport ? (
         <PreparationReportSheet

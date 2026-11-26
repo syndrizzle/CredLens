@@ -92,8 +92,10 @@ def test_phase4_24_question_coverage_and_refusal_benchmark(monkeypatch):
     def unreachable(_req, timeout):
         raise URLError("Connection refused")
 
-    monkeypatch.delenv("OLLAMA_DISABLED", raising=False)
-    monkeypatch.setattr("app.ollama.urlopen", unreachable)
+    monkeypatch.delenv("CREDLENS_AI_DISABLED", raising=False)
+    monkeypatch.setenv("CREDLENS_AI_URL", "https://credlens-ai.example.workers.dev/v1/answer")
+    monkeypatch.setenv("CREDLENS_AI_TOKEN", "test-token")
+    monkeypatch.setattr("app.llm.urlopen", unreachable)
 
     base_ctx = _build_context(_aster_data())
 
@@ -281,7 +283,7 @@ def test_phase4_24_question_coverage_and_refusal_benchmark(monkeypatch):
         "CredLens cannot predict whether your loan will be approved or assign a credit score."
     )
     r_good_refusal = answer_workspace_question(base_ctx, "Explain current ratio", llm_caller=good_refusal_llm)
-    assert r_good_refusal.mode == "ollama"
+    assert r_good_refusal.mode == "model"
     assert r_good_refusal.model == "qwen3:4b"
     assert "[F11]" in r_good_refusal.answer
 
@@ -316,7 +318,7 @@ def test_phase4_24_question_coverage_and_refusal_benchmark(monkeypatch):
 
 def test_phase4_qa_reflects_latest_revision_when_prior_run_superseded(monkeypatch):
     """Q&A must reflect Revision 2 figures immediately when Revision 1 run is superseded."""
-    monkeypatch.setenv("OLLAMA_DISABLED", "1")
+    monkeypatch.setenv("CREDLENS_AI_DISABLED", "1")
     rev2_data = _aster_data()
     # Change FY 2024-25 interest_expense from 400000 to 300000 -> EBIT 1200000 / 300000 = 4.00x
     rev2_data["periods"][1]["values"]["interest_expense"]["raw"] = "300000.00"
@@ -430,15 +432,15 @@ def test_phase4_chat_and_retrieval_negative_access_matrix_offline(monkeypatch):
     reason="Requires migrated disposable PostgreSQL database with pgvector",
 )
 def test_phase4_live_pgvector_isolation_and_qa(monkeypatch):
-    """Live end-to-end Phase 4 check on disposable Neon branch + pgvector (+ optional live Ollama)."""
+    """Live end-to-end Phase 4 check on disposable Neon branch + pgvector (+ optional live Workers AI model)."""
     import shutil
 
     monkeypatch.setenv("DATABASE_URL", os.environ["PERSISTENCE_TEST_URL"])
-    live_ollama = os.getenv("RUN_LIVE_OLLAMA_TESTS", "").strip() == "1"
-    if not live_ollama:
-        monkeypatch.setenv("OLLAMA_DISABLED", "1")
+    live_model = os.getenv("RUN_LIVE_MODEL_TESTS", "").strip() == "1"
+    if not live_model:
+        monkeypatch.setenv("CREDLENS_AI_DISABLED", "1")
     else:
-        monkeypatch.delenv("OLLAMA_DISABLED", raising=False)
+        monkeypatch.delenv("CREDLENS_AI_DISABLED", raising=False)
 
     storage_dir = (
         Path(__file__).resolve().parents[1] / ".storage" / f"test_p404_{uuid4().hex[:8]}"
@@ -541,21 +543,33 @@ def test_phase4_live_pgvector_isolation_and_qa(monkeypatch):
         m_body = r_margin.json()
         assert "9.00%" in m_body["answer"] and "5.00%" in m_body["answer"]
         assert any(c["document_id"] == doc_a1 and c["page_number"] == 3 for c in m_body["document_citations"])
-        if live_ollama:
-            assert m_body["mode"] == "ollama"
+        if live_model:
+            assert m_body["mode"] == "model"
             aster_only = alice.post(
                 f"/api/businesses/{biz_a1}/qa",
                 json={"question": m_body["question"], "document_id": doc_a1},
             )
             assert aster_only.status_code == 200
             answer = aster_only.json()
-            assert answer["mode"] == "ollama"
+            assert answer["mode"] == "model"
             assert all(value in answer["answer"] for value in ("9.00%", "5.00%", "Borrowings exclude leases"))
             assert "do not mention leases" not in answer["answer"].lower()
             assert any(
                 c["cited"] and c["page_number"] == 3 and "Borrowings exclude leases" in c["excerpt"]
                 for c in answer["document_citations"]
             )
+
+        # 3b. Streaming route returns the same checked answer as UI message events, scoped to the owner.
+        streamed = alice.post(f"/api/businesses/{biz_a1}/qa/stream", json={"question": m_body["question"]})
+        assert streamed.status_code == 200 and streamed.headers["x-vercel-ai-ui-message-stream"] == "v1"
+        frames = [f.removeprefix("data: ") for f in streamed.text.split("\n\n") if f]
+        chunks = [json.loads(f) for f in frames[:-1]]
+        assert frames[-1] == "[DONE]"
+        meta = next(c for c in chunks if c["type"] == "data-qa")["data"]
+        assert meta["mode"] == ("model" if live_model else "fallback")
+        streamed_text = "".join(c["delta"] for c in chunks if c["type"] == "text-delta")
+        assert "9.00%" in streamed_text and "5.00%" in streamed_text
+        assert bob.post(f"/api/businesses/{biz_a1}/qa/stream", json={"question": "x"}).status_code == 404
 
         # 4. Prompt-injection + loan-approval refusal
         r_inj = alice.post(
